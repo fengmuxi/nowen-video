@@ -2,6 +2,7 @@ package service
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -138,6 +139,84 @@ func TestParseMovieFilename_Classic(t *testing.T) {
 				t.Errorf("TMDbID: want %d, got %d", c.wantTMDB, got.TMDbID)
 			}
 			fmt.Printf("  %s → title=%q year=%d tmdb=%d\n", c.filename, got.Title, got.Year, got.TMDbID)
+		})
+	}
+}
+
+// TestParseMovieFilename_PT 覆盖 PT 站点资源常见命名：
+//   - 尾部制作组 -FRDS / -WiKi / -CtrlHD
+//   - 叠加制作组 -MNHD-FRDS
+//   - PT 主站标记 @CHDBits / @MTeam
+//   - 音频通道 5.1 / 7.1
+//   - HDR/DV/Atmos/TrueHD 等噪声
+//   - 流媒体源 AMZN / NF
+func TestParseMovieFilename_PT(t *testing.T) {
+	cases := []struct {
+		filename string
+		wantTit  string // 仅校验是否包含期望的核心标题（避免严格匹配空格细节）
+		wantYear int
+	}{
+		{
+			filename: "The.Matrix.1999.BluRay.1080p.x264.DTS-HDMA.5.1-FRDS.mkv",
+			wantTit:  "The Matrix",
+			wantYear: 1999,
+		},
+		{
+			filename: "Inception.2010.UHD.BluRay.2160p.HEVC.DV.HDR10.TrueHD.Atmos.7.1-BeyondHD.mkv",
+			wantTit:  "Inception",
+			wantYear: 2010,
+		},
+		{
+			filename: "Titanic.1997.BluRay.1080p.x265.10bit.DTS-HDMA.5.1-MNHD-FRDS@CHDBits.mkv",
+			wantTit:  "Titanic",
+			wantYear: 1997,
+		},
+		{
+			filename: "Game.of.Thrones.S01E01.2011.1080p.BluRay.DD5.1.x264-CtrlHD.mkv",
+			wantTit:  "Game of Thrones S01E01",
+			wantYear: 2011,
+		},
+		{
+			filename: "Spider-Man.No.Way.Home.2021.2160p.AMZN.WEB-DL.DDP5.1.HDR10+.HEVC-WiKi.mkv",
+			wantTit:  "Spider-Man No Way Home",
+			wantYear: 2021,
+		},
+		{
+			filename: "流浪地球2.The.Wandering.Earth.II.2023.2160p.WEB-DL.HEVC.10bit.HDR.DDP5.1-CMCT@PTHome.mkv",
+			wantTit:  "流浪地球",
+			wantYear: 2023,
+		},
+		{
+			filename: "Oppenheimer.2023.IMAX.2160p.UHD.BluRay.REMUX.HDR.HEVC.Atmos-FraMeSToR.mkv",
+			wantTit:  "Oppenheimer",
+			wantYear: 2023,
+		},
+		{
+			filename: "Dune.Part.Two.2024.1080p.NF.WEB-DL.DDP5.1.Atmos.H.264-FLUX.mkv",
+			wantTit:  "Dune Part Two",
+			wantYear: 2024,
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.filename, func(t *testing.T) {
+			got := ParseMovieFilename(c.filename)
+			gotTitle := strings.Join(strings.Fields(got.Title), " ")
+			if !strings.EqualFold(gotTitle, c.wantTit) {
+				t.Errorf("Title: want %q, got %q", c.wantTit, gotTitle)
+			}
+			if got.Year != c.wantYear {
+				t.Errorf("Year: want %d, got %d", c.wantYear, got.Year)
+			}
+			// 关键断言：清洗后的标题不应包含 PT 噪声词
+			lower := strings.ToLower(gotTitle)
+			noisy := []string{"frds", "wiki", "@", "5.1", "7.1", "10bit", "hdr10", "atmos", "truehd", "bluray", "x264", "x265", "hevc", "remux", "amzn", "web-dl", "ddp", "imax", "hdma", "dts", "+"}
+			for _, n := range noisy {
+				if strings.Contains(lower, n) {
+					t.Errorf("noise %q leaked into title %q (filename=%s)", n, gotTitle, c.filename)
+				}
+			}
+			fmt.Printf("  %s → title=%q year=%d\n", c.filename, gotTitle, got.Year)
 		})
 	}
 }

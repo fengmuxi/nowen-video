@@ -34,6 +34,7 @@ import {
   Bookmark,
   RefreshCw,
   FileText,
+  Layers,
 } from 'lucide-react'
 import clsx from 'clsx'
 import LibraryManager from '@/components/LibraryManager'
@@ -43,6 +44,7 @@ import UsersTab from '@/components/admin/UsersTab'
 import TasksTab from '@/components/admin/TasksTab'
 import AITab from '@/components/admin/AITab'
 import StorageTab from '@/components/admin/StorageTab'
+import ClassificationTab from '@/components/admin/ClassificationTab'
 
 
 import { useTranslation } from '@/i18n'
@@ -55,6 +57,7 @@ const TABS = [
   { id: 'tasks', labelKey: 'admin.tabTasks', icon: ListTodo, shortLabelKey: 'admin.shortTasks' },
   { id: 'logs', labelKey: 'admin.tabLogs', icon: FileText, shortLabelKey: 'admin.shortLogs' },
   { id: 'ai', labelKey: 'admin.tabAI', icon: Sparkles, shortLabelKey: 'admin.shortAI' },
+  { id: 'classify', labelKey: 'admin.tabClassify', icon: Layers, shortLabelKey: 'admin.shortClassify' },
   { id: 'storage', labelKey: 'admin.tabStorage', icon: HardDrive, shortLabelKey: 'admin.shortStorage' },
 ] as const
 
@@ -1206,6 +1209,11 @@ export default function AdminPage() {
         {/* ===== 存储管理标签页 ===== */}
         {activeTab === 'storage' && (
           <StorageTab />
+        )}
+
+        {/* ===== 扫描归类标签页 ===== */}
+        {activeTab === 'classify' && (
+          <ClassificationTab />
         )}
 
       </div>

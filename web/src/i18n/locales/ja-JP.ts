@@ -387,6 +387,7 @@ const jaJP: Record<string, string> = {
   'admin.shortLive': 'ライブ',
   'admin.shortAI': 'AI',
   'admin.shortStorage': 'ストレージ',
+  'admin.shortClassify': '分類',
   'admin.shortTags': 'タグ',
   'admin.shortShares': '共有',
   'admin.metadataConfig': 'メタデータスクレイピング設定',

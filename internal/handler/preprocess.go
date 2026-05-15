@@ -295,6 +295,219 @@ func (h *PreprocessHandler) CleanCache(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "预处理缓存已清理"})
 }
 
+// GetStorageUsage 获取预处理产物的磁盘占用统计
+//
+// 查询参数：
+//   - limit：返回明细条目数（默认 20，最大 200，0=不限制）
+func (h *PreprocessHandler) GetStorageUsage(c *gin.Context) {
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+	if limit < 0 {
+		limit = 0
+	}
+	if limit > 200 {
+		limit = 200
+	}
+
+	usage, err := h.preprocessService.GetStorageUsage(limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": usage})
+}
+
+// CleanOrphanCache 清理所有孤儿预处理目录（DB 中无对应任务的目录）
+func (h *PreprocessHandler) CleanOrphanCache(c *gin.Context) {
+	cleaned, freed, err := h.preprocessService.CleanOrphanCache()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"message": "孤儿预处理目录已清理",
+		"data": gin.H{
+			"cleaned":     cleaned,
+			"freed_bytes": freed,
+		},
+	})
+}
+
+// GetCacheUsage 获取整个 cache/ 目录的分类占用统计
+//
+// 查询参数：
+//   - force=1：跳过 30s 内存缓存，强制重新扫盘
+func (h *PreprocessHandler) GetCacheUsage(c *gin.Context) {
+	force := c.Query("force") == "1" || c.Query("force") == "true"
+	usage, err := h.preprocessService.GetCacheUsage(force)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": usage})
+}
+
+// CleanCacheCategory 清空单个缓存分类目录
+//
+// 查询参数：
+//   - key=transcode / preprocess / abr / thumbnails / webdav_download / ...
+//   - mode=all（默认，真正清空）/ orphan（仅 preprocess 分类有效，只清孤儿）
+//
+// 仅对 cacheCategoryMeta 中 cleanable=true 的分类生效；其它返回 400。
+func (h *PreprocessHandler) CleanCacheCategory(c *gin.Context) {
+	key := c.Query("key")
+	if key == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "缺少 key 参数"})
+		return
+	}
+	mode := c.Query("mode")
+	res, err := h.preprocessService.CleanCacheCategory(key, mode)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"message": "已清理",
+		"data":    res,
+	})
+}
+
+// CleanAllCache 一键清空所有可清理分类
+func (h *PreprocessHandler) CleanAllCache(c *gin.Context) {
+	results, totalFreed, totalCount, err := h.preprocessService.CleanAllCleanableCache()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"message": "一键清理完成",
+		"data": gin.H{
+			"results":      results,
+			"total_freed":  totalFreed,
+			"total_count":  totalCount,
+			"category_num": len(results),
+		},
+	})
+}
+
+// ==================== 自定义筛选预处理 ====================
+
+// preprocessFilterRequest 共用的请求体（预览 + 提交）
+//
+// exclude_* 三个字段都用指针，区分"未传 = 使用默认值 true"和"显式传 false"。
+type preprocessFilterRequest struct {
+	service.PreprocessFilter
+	ExcludeAlreadyPreprocessedPtr *bool `json:"exclude_already_preprocessed_ptr,omitempty"`
+	ExcludeDirectlyPlayablePtr    *bool `json:"exclude_directly_playable_ptr,omitempty"`
+	ExcludeStrmPtr                *bool `json:"exclude_strm_ptr,omitempty"`
+}
+
+// 把请求体转成 service.PreprocessFilter，并应用默认值
+func (r *preprocessFilterRequest) toServiceFilter() *service.PreprocessFilter {
+	f := r.PreprocessFilter
+	// 默认值：三个 exclude 都为 true（最安全的行为：不重复预处理 + 不浪费 CPU + 不动远程流）
+	f.ExcludeAlreadyPreprocessed = true
+	f.ExcludeDirectlyPlayable = true
+	f.ExcludeStrm = true
+	if r.ExcludeAlreadyPreprocessedPtr != nil {
+		f.ExcludeAlreadyPreprocessed = *r.ExcludeAlreadyPreprocessedPtr
+	}
+	if r.ExcludeDirectlyPlayablePtr != nil {
+		f.ExcludeDirectlyPlayable = *r.ExcludeDirectlyPlayablePtr
+	}
+	if r.ExcludeStrmPtr != nil {
+		f.ExcludeStrm = *r.ExcludeStrmPtr
+	}
+	return &f
+}
+
+// PreviewByFilter 预览：根据筛选条件返回命中数量、抽样列表、分布直方图
+//
+// POST /api/admin/preprocess/filter-preview
+func (h *PreprocessHandler) PreviewByFilter(c *gin.Context) {
+	var req preprocessFilterRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	preview, err := h.preprocessService.PreviewFilter(req.toServiceFilter())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": preview})
+}
+
+// SubmitByFilter 按筛选条件批量提交预处理任务
+//
+// POST /api/admin/preprocess/submit-by-filter
+//
+// 请求体除了 PreprocessFilter 字段外，还接受：
+//   - priority：任务优先级（默认 0）
+//   - force：是否强制（默认 false；true 会让 SubmitMedia 跳过"可直接播放"判定）
+func (h *PreprocessHandler) SubmitByFilter(c *gin.Context) {
+	var req struct {
+		preprocessFilterRequest
+		Priority int  `json:"priority"`
+		Force    bool `json:"force"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	submitted, skipped, err := h.preprocessService.SubmitByFilter(
+		req.toServiceFilter(), req.Priority, req.Force,
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"message": "已按筛选条件提交预处理任务",
+		"data": gin.H{
+			"submitted": submitted,
+			"skipped":   skipped,
+		},
+	})
+}
+
+// ListCandidateMedia 列出可供用户手动勾选预处理的影视列表
+//
+// GET /api/admin/preprocess/candidates
+//
+// Query 参数：
+//   - page, size：分页（默认 1 / 20，size 上限 200）
+//   - keyword：标题/原名/番号模糊匹配
+//   - library_id：媒体库 ID
+//   - media_type：movie / episode
+//   - video_codec：视频编码
+//   - only_need_preprocess：true 时仅返回"需要预处理"的（排除已完成/可直接播放/STRM）
+//   - sort_by：updated_at(默认) / file_size / duration / year
+//   - sort_order：desc(默认) / asc
+func (h *PreprocessHandler) ListCandidateMedia(c *gin.Context) {
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	size, _ := strconv.Atoi(c.DefaultQuery("size", "20"))
+
+	onlyNeed := c.Query("only_need_preprocess")
+	params := service.PreprocessCandidateParams{
+		Page:               page,
+		Size:               size,
+		Keyword:            c.Query("keyword"),
+		LibraryID:          c.Query("library_id"),
+		MediaType:          c.Query("media_type"),
+		VideoCodec:         c.Query("video_codec"),
+		OnlyNeedPreprocess: onlyNeed == "true" || onlyNeed == "1",
+		SortBy:             c.Query("sort_by"),
+		SortOrder:          c.Query("sort_order"),
+	}
+
+	result, err := h.preprocessService.ListCandidateMedia(params)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": result})
+}
+
 // ServePreprocessedMaster 提供预处理后的 HLS 主播放列表
 func (h *PreprocessHandler) ServePreprocessedMaster(c *gin.Context) {
 	mediaID := c.Param("id")

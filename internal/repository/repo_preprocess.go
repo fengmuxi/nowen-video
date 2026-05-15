@@ -10,6 +10,11 @@ type PreprocessRepo struct {
 	db *gorm.DB
 }
 
+// DB 返回底层数据库连接（供复杂查询使用）
+func (r *PreprocessRepo) DB() *gorm.DB {
+	return r.db
+}
+
 // Create 创建预处理任务
 func (r *PreprocessRepo) Create(task *model.PreprocessTask) error {
 	return r.db.Create(task).Error
@@ -73,6 +78,15 @@ func (r *PreprocessRepo) ListAll(page, pageSize int, status string) ([]model.Pre
 		Offset((page - 1) * pageSize).Limit(pageSize).
 		Find(&tasks).Error
 	return tasks, total, err
+}
+
+// ListAllForUsage 不分页地列出所有任务，仅用于存储占用统计场景
+// 不带 Preload，字段够轻量；调用方在内存中按 media_id 自行做最新优先去重。
+func (r *PreprocessRepo) ListAllForUsage() ([]model.PreprocessTask, error) {
+	var tasks []model.PreprocessTask
+	err := r.db.Select("id, media_id, status, media_title, output_dir, created_at").
+		Find(&tasks).Error
+	return tasks, err
 }
 
 // CountByStatus 按状态统计任务数量

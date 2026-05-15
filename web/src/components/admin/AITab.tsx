@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { aiApi } from '@/api'
 import { useToast } from '@/components/Toast'
 import { useTranslation } from '@/i18n'
@@ -111,6 +111,14 @@ export default function AITab() {
   const [showApiKey, setShowApiKey] = useState(false)
   const [showAdvanced, setShowAdvanced] = useState(false)
 
+  // ==================== 多 Provider 配置记忆 ====================
+  // 每个 provider 当前会话内未保存的草稿（切换走时暂存，切回时恢复）
+  // 仅在前端内存中，不上送也不持久化；保存后由后端 profiles 接管
+  type ProviderDraft = { api_base: string; api_key: string; model: string }
+  const draftProfilesRef = useRef<Record<string, ProviderDraft>>({})
+  // 标记 fetchStatus 期间不要被切换逻辑误判为「用户在编辑」
+  const skipDraftSnapshotRef = useRef<boolean>(false)
+
   // 连接测试
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<AITestResult | null>(null)
@@ -138,7 +146,8 @@ export default function AITab() {
       const res = await aiApi.getStatus()
       const s = res.data.data
       setStatus(s)
-      // 同步到编辑状态
+      // 同步到编辑状态（顶层即激活 provider 的当前配置）
+      skipDraftSnapshotRef.current = true
       setEditEnabled(s.enabled)
       setEditProvider(s.provider)
       setEditApiBase(s.api_base || '')
@@ -151,6 +160,12 @@ export default function AITab() {
       setEditCacheTTL(s.cache_ttl_hours || 168)
       setEditMaxConcurrent(s.max_concurrent || 3)
       setEditRequestInterval(s.request_interval_ms || 200)
+      // 拉到最新的激活档案，相当于覆盖了草稿，清空所有草稿避免脏数据
+      draftProfilesRef.current = {}
+      // 下一帧再放开（避免本轮 setEditProvider 触发的副作用被当作用户切换）
+      setTimeout(() => {
+        skipDraftSnapshotRef.current = false
+      }, 0)
     } catch {
       // 静默
     }
@@ -187,6 +202,16 @@ export default function AITab() {
   const handleSaveConfig = async () => {
     setSaving(true)
     try {
+      // 当前 provider 的 profile 增量（只传当前激活 provider；后端会做 merge）
+      const currentProfile: { api_base: string; api_key?: string; model: string } = {
+        api_base: editApiBase,
+        model: editModel,
+      }
+      // api_key 仅在用户输入新值时下发（空字符串 → 后端保留原值，避免覆盖掩码）
+      if (editApiKey) {
+        currentProfile.api_key = editApiKey
+      }
+
       const updates: Record<string, unknown> = {
         enabled: editEnabled,
         provider: editProvider,
@@ -200,13 +225,19 @@ export default function AITab() {
         cache_ttl_hours: editCacheTTL,
         max_concurrent: editMaxConcurrent,
         request_interval_ms: editRequestInterval,
+        // 把当前 provider 的配置以 profile 形式同步存档
+        profiles: {
+          [editProvider]: currentProfile,
+        },
       }
-      // 只在用户输入了新密钥时才更新
+      // 只在用户输入了新密钥时才更新顶层 api_key（与 profile 保持一致）
       if (editApiKey) {
         updates.api_key = editApiKey
       }
 
       await aiApi.updateConfig(updates)
+      // 保存成功，清空当前 provider 的草稿（已成为激活档案）
+      delete draftProfilesRef.current[editProvider]
       toast.success(t('aiTab.configSaved'))
       setEditApiKey('') // 清空密钥输入
       await fetchStatus()
@@ -289,16 +320,52 @@ export default function AITab() {
   }
 
   // ==================== 提供商切换 ====================
+  // 切换策略（按优先级恢复表单）：
+  //   1. 当前 provider 表单值 → 暂存为草稿到 draftProfilesRef[oldProvider]
+  //   2. 目标 provider：优先取 draftProfilesRef[newProvider]（未保存草稿）
+  //   3. 否则取 status.profiles[newProvider]（后端已保存档案）
+  //   4. 否则使用 PROVIDERS 预设的 apiBase + 第一个模型
   const handleProviderChange = (providerId: string) => {
-    setEditProvider(providerId)
-    const provider = PROVIDERS.find((p) => p.id === providerId)
-    if (provider && provider.apiBase) {
-      setEditApiBase(provider.apiBase)
-      if (provider.models.length > 0) {
-        setEditModel(provider.models[0])
+    if (providerId === editProvider) return
+
+    // 1) 暂存当前编辑值为草稿（API Key 为空也存，恢复时配合后端 placeholder 显示）
+    if (!skipDraftSnapshotRef.current && editProvider) {
+      draftProfilesRef.current[editProvider] = {
+        api_base: editApiBase,
+        api_key: editApiKey,
+        model: editModel,
       }
     }
+
+    setEditProvider(providerId)
+
+    // 2) 恢复优先级：草稿 > 后端档案 > 预设
+    const draft = draftProfilesRef.current[providerId]
+    const savedProfile = status?.profiles?.[providerId]
+    const preset = PROVIDERS.find((p) => p.id === providerId)
+
+    if (draft) {
+      // 恢复未保存草稿
+      setEditApiBase(draft.api_base)
+      setEditApiKey(draft.api_key)
+      setEditModel(draft.model)
+    } else if (savedProfile) {
+      // 恢复后端已保存档案（api_key 字段后端不返回明文，留空让 placeholder 提示）
+      setEditApiBase(savedProfile.api_base || preset?.apiBase || '')
+      setEditApiKey('')
+      setEditModel(savedProfile.model || preset?.models[0] || '')
+    } else if (preset) {
+      // 全新 provider，用预设
+      setEditApiBase(preset.apiBase)
+      setEditApiKey('')
+      setEditModel(preset.models[0] || '')
+    }
   }
+
+  // 当前 provider 在后端是否已配置过 api_key（每个 provider 独立判断）
+  const currentProfileSavedKey = !!status?.profiles?.[editProvider]?.api_key_configured
+  // 当前 provider 在前端是否有未保存草稿（用于 UI 提示）
+  const currentProviderHasDraft = !!draftProfilesRef.current[editProvider]
 
   // 当前提供商的可用模型
   const currentProvider = PROVIDERS.find((p) => p.id === editProvider)
@@ -430,27 +497,47 @@ export default function AITab() {
               LLM 提供商
             </label>
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
-              {PROVIDERS.map((p) => (
-                <button
-                  key={p.id}
-                  onClick={() => handleProviderChange(p.id)}
-                  className={clsx(
-                    'rounded-lg px-3 py-2.5 text-sm font-medium transition-all text-center',
-                    editProvider === p.id
-                      ? 'ring-2'
-                      : 'hover:bg-white/[0.03]'
-                  )}
-                  style={{
-                    background: editProvider === p.id ? 'var(--neon-blue-10)' : 'var(--bg-surface)',
-                    border: editProvider === p.id ? undefined : '1px solid var(--border-subtle)',
-                    color: editProvider === p.id ? 'var(--neon-blue)' : 'var(--text-secondary)',
-                    ...(editProvider === p.id ? { boxShadow: '0 0 0 2px var(--neon-blue)' } : {}),
-                  }}
-                >
-                  {p.name}
-                </button>
-              ))}
+              {PROVIDERS.map((p) => {
+                const profileConfigured = !!status?.profiles?.[p.id]?.api_key_configured
+                const hasDraft = !!draftProfilesRef.current[p.id] && p.id !== editProvider
+                return (
+                  <button
+                    key={p.id}
+                    onClick={() => handleProviderChange(p.id)}
+                    className={clsx(
+                      'relative rounded-lg px-3 py-2.5 text-sm font-medium transition-all text-center',
+                      editProvider === p.id
+                        ? 'ring-2'
+                        : 'hover:bg-white/[0.03]'
+                    )}
+                    style={{
+                      background: editProvider === p.id ? 'var(--neon-blue-10)' : 'var(--bg-surface)',
+                      border: editProvider === p.id ? undefined : '1px solid var(--border-subtle)',
+                      color: editProvider === p.id ? 'var(--neon-blue)' : 'var(--text-secondary)',
+                      ...(editProvider === p.id ? { boxShadow: '0 0 0 2px var(--neon-blue)' } : {}),
+                    }}
+                  >
+                    {p.name}
+                    {/* 右上角状态点：已配置=绿、有草稿=黄 */}
+                    {(profileConfigured || hasDraft) && (
+                      <span
+                        className={clsx(
+                          'absolute -right-1 -top-1 h-2 w-2 rounded-full',
+                          hasDraft ? 'bg-yellow-400' : 'bg-green-400'
+                        )}
+                        title={hasDraft ? '有未保存草稿' : '已保存密钥'}
+                      />
+                    )}
+                  </button>
+                )
+              })}
             </div>
+            <p className="mt-1.5 text-xs text-theme-muted">
+              <span className="inline-block h-1.5 w-1.5 rounded-full bg-green-400 mr-1 align-middle" />
+              已保存密钥
+              <span className="inline-block h-1.5 w-1.5 rounded-full bg-yellow-400 ml-3 mr-1 align-middle" />
+              有未保存草稿（切换 provider 自动暂存，刷新页面或保存后丢失）
+            </p>
           </div>
 
           {/* API Base */}
@@ -478,7 +565,7 @@ export default function AITab() {
                 value={editApiKey}
                 onChange={(e) => setEditApiKey(e.target.value)}
                 className="input pr-10 font-mono text-sm"
-                placeholder={status?.api_configured ? '已配置（输入新值可覆盖）' : '请输入 API Key'}
+                placeholder={currentProfileSavedKey ? '已配置（输入新值可覆盖）' : '请输入 API Key'}
               />
               <button
                 onClick={() => setShowApiKey(!showApiKey)}
@@ -487,10 +574,16 @@ export default function AITab() {
                 {showApiKey ? <EyeOff size={16} /> : <Eye size={16} />}
               </button>
             </div>
-            {status?.api_configured && (
+            {currentProfileSavedKey && !editApiKey && (
               <p className="mt-1 flex items-center gap-1 text-xs text-green-400">
                 <Check size={12} />
-                密钥已配置
+                {currentProvider?.name || editProvider} 的密钥已保存（留空提交不会清除）
+              </p>
+            )}
+            {currentProviderHasDraft && (
+              <p className="mt-1 flex items-center gap-1 text-xs text-yellow-400">
+                <AlertTriangle size={12} />
+                有未保存的修改（切换 provider 会自动暂存草稿）
               </p>
             )}
           </div>

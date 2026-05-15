@@ -51,6 +51,10 @@ type Repositories struct {
 	SystemLog *SystemLogRepo
 	// 文件管理操作日志（持久化）
 	FileOpLog *FileOpLogRepo
+	// SmartRename 智能扫描重命名
+	Rename *RenameRepo
+	// 扫描后处理：虚拟归类与命名映射（仅 DB 层）
+	ScanClassification *ScanClassificationRepo
 }
 
 func NewRepositories(db *gorm.DB) *Repositories {
@@ -99,6 +103,10 @@ func NewRepositories(db *gorm.DB) *Repositories {
 		SystemLog: &SystemLogRepo{db: db},
 		// 文件管理操作日志
 		FileOpLog: NewFileOpLogRepo(db),
+		// SmartRename 智能扫描重命名
+		Rename: NewRenameRepo(db),
+		// 扫描后处理
+		ScanClassification: NewScanClassificationRepo(db),
 	}
 }
 

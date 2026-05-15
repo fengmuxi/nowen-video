@@ -772,6 +772,12 @@ export interface SearchIntent {
 }
 
 // ==================== AI 服务状态 ====================
+export interface AIProviderProfileView {
+  api_base: string
+  model: string
+  api_key_configured: boolean
+}
+
 export interface AIStatus {
   enabled: boolean
   provider: string
@@ -791,6 +797,8 @@ export interface AIStatus {
   cache_ttl_hours: number
   max_concurrent: number
   request_interval_ms: number
+  // 各 provider 的配置档案（key 字段已脱敏，仅返回 api_key_configured 标识）
+  profiles?: Record<string, AIProviderProfileView>
 }
 
 export interface AIErrorLog {
@@ -1658,6 +1666,134 @@ export interface PreprocessStatistics {
   queue_size: number
   hw_accel: string
   mode: string
+}
+
+// 预处理产物磁盘占用 - 单条目
+export interface PreprocessStorageItem {
+  media_id: string
+  media_title: string
+  task_id?: string
+  status?: string // pending/running/completed/failed/cancelled/orphan
+  output_dir: string
+  size: number // bytes
+  is_orphan: boolean
+}
+
+// 预处理产物磁盘占用 - 总体响应
+export interface PreprocessStorageUsage {
+  root_dir: string
+  total_size: number
+  total_count: number
+  task_size: number
+  orphan_size: number
+  orphan_count: number
+  items: PreprocessStorageItem[]
+  scanned_at: string
+  scan_duration_ms: number
+}
+
+// 缓存目录分类（cache/ 一级子目录归类）
+export interface CacheCategory {
+  key: string         // preprocess / transcode / abr / thumbnails / ... / 'other:xxx'
+  label: string       // 中文展示名（未登记目录会用原始目录名）
+  path: string        // 子目录绝对路径
+  size: number        // 字节数
+  count: number       // 文件数
+  cleanable: boolean  // 是否安全可清空
+}
+
+// 整个 cache/ 目录的分类占用统计
+export interface CacheUsage {
+  root_dir: string
+  total_size: number
+  total_count: number
+  categories: CacheCategory[]
+  scanned_at: string
+  scan_duration_ms: number
+  from_cache: boolean
+}
+
+// 自定义筛选预处理 - 筛选条件
+export interface PreprocessFilter {
+  library_ids?: string[]
+  media_types?: string[] // movie / episode
+  video_codecs?: string[] // h264 / hevc / av1 / vp9 ...
+  audio_codecs?: string[] // aac / ac3 / dts / flac ...
+  containers?: string[] // mp4 / mkv / avi / mov / ts / flv / webm
+  resolutions?: string[] // 1080p / 720p / 4K / 480p
+  keyword?: string
+  min_size_bytes?: number
+  max_size_bytes?: number
+  min_year?: number
+  max_year?: number
+  min_duration?: number // 秒
+  max_duration?: number // 秒
+  // 排除策略 - 全部默认 true（在后端默认）；undefined = 后端走默认；显式 false = 不排除
+  exclude_already_preprocessed?: boolean
+  exclude_directly_playable?: boolean
+  exclude_strm?: boolean
+}
+
+// 自定义筛选预处理 - 抽样条目
+export interface PreprocessSample {
+  media_id: string
+  title: string
+  year: number
+  media_type: string
+  video_codec: string
+  audio_codec: string
+  resolution: string
+  duration: number
+  file_size: number
+  file_path: string
+}
+
+// 自定义筛选预处理 - 预览结果
+export interface PreprocessFilterPreview {
+  matched_count: number
+  raw_count: number
+  excluded_already: number
+  excluded_playable: number
+  excluded_strm: number
+  total_size: number
+  sample: PreprocessSample[]
+  codec_histogram: Record<string, number>
+  resolution_hist: Record<string, number>
+}
+
+// 候选影视条目（供用户手动勾选预处理）
+export interface PreprocessCandidate {
+  media_id: string
+  title: string
+  orig_title?: string
+  year: number
+  library_id: string
+  media_type: string
+  video_codec: string
+  audio_codec: string
+  resolution: string
+  duration: number
+  file_size: number
+  file_path: string
+  poster_path: string
+  is_strm: boolean
+  can_play_directly: boolean
+  preprocess_status: string // none / pending / queued / running / paused / completed / failed / cancelled
+  task_id?: string
+  // 剧集专属（仅 media_type=episode 时有意义）
+  season_num?: number
+  episode_num?: number
+  episode_title?: string
+  // 刮削状态：pending / scraped / partial / failed / manual
+  scrape_status?: string
+}
+
+// 候选影视列表分页响应
+export interface PreprocessCandidateList {
+  items: PreprocessCandidate[]
+  total: number
+  page: number
+  size: number
 }
 
 export interface SystemLoadInfo {

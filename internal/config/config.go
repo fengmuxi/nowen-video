@@ -120,18 +120,29 @@ type CacheConfig struct {
 
 // ==================== 主配置结构体 ====================
 
+// AIProviderProfile 单个 LLM 提供商的配置档案
+// 用于在不同 provider 之间切换时分别记忆 api_base / api_key / model
+type AIProviderProfile struct {
+	APIBase string `mapstructure:"api_base" yaml:"api_base"`
+	APIKey  string `mapstructure:"api_key" yaml:"api_key"`
+	Model   string `mapstructure:"model" yaml:"model"`
+}
+
 // AIConfig AI 功能配置
 type AIConfig struct {
 	// 是否启用 AI 功能（总开关）
 	Enabled bool `mapstructure:"enabled"`
 	// LLM 提供商: openai / deepseek / qwen / ollama
 	Provider string `mapstructure:"provider"`
-	// API 基础地址
+	// API 基础地址（当前激活 provider 的 api_base，与 profiles[provider].api_base 保持一致）
 	APIBase string `mapstructure:"api_base"`
-	// API 密钥
+	// API 密钥（当前激活 provider 的 api_key，与 profiles[provider].api_key 保持一致）
 	APIKey string `mapstructure:"api_key"`
-	// 模型名称
+	// 模型名称（当前激活 provider 的 model，与 profiles[provider].model 保持一致）
 	Model string `mapstructure:"model"`
+	// 各 provider 的配置档案（按 provider id 索引，如 openai/deepseek/qwen/ollama/custom）
+	// 切换 provider 时从此表恢复对应配置，避免重新填 key/base/model
+	Profiles map[string]AIProviderProfile `mapstructure:"profiles" yaml:"profiles,omitempty"`
 	// 请求超时（秒）
 	Timeout int `mapstructure:"timeout"`
 	// 功能开关
@@ -1068,6 +1079,105 @@ func (c *Config) SaveSTRMConfig() error {
 	viper.Set("strm.domain_user_agents", sc.DomainUserAgents)
 	viper.Set("strm.domain_referers", sc.DomainReferers)
 	return c.saveConfig()
+}
+
+// SaveAIConfig 将当前 AI 配置（含 profiles）持久化到 config/ai.yaml 分片文件
+// 调用前应先在内存中更新 c.AI 字段，本方法只负责落盘。
+// 仅写 config/ai.yaml（找到的第一个），不污染主 config.yaml。
+// 同时也通过 viper.Set 同步到全局 viper，避免重启前后内存与磁盘不一致。
+func (c *Config) SaveAIConfig() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	ac := c.AI
+
+	// 1. 同步到全局 viper（ai.* 命名空间）
+	viper.Set("ai.enabled", ac.Enabled)
+	viper.Set("ai.provider", ac.Provider)
+	viper.Set("ai.api_base", ac.APIBase)
+	viper.Set("ai.api_key", ac.APIKey)
+	viper.Set("ai.model", ac.Model)
+	viper.Set("ai.timeout", ac.Timeout)
+	viper.Set("ai.enable_smart_search", ac.EnableSmartSearch)
+	viper.Set("ai.enable_recommend_reason", ac.EnableRecommendReason)
+	viper.Set("ai.enable_metadata_enhance", ac.EnableMetadataEnhance)
+	viper.Set("ai.monthly_budget", ac.MonthlyBudget)
+	viper.Set("ai.cache_ttl_hours", ac.CacheTTLHours)
+	viper.Set("ai.max_concurrent", ac.MaxConcurrent)
+	viper.Set("ai.request_interval_ms", ac.RequestIntervalMs)
+	if ac.Profiles != nil {
+		// 转换为可被 yaml 序列化的 map[string]map[string]string 形式
+		profilesMap := make(map[string]map[string]string, len(ac.Profiles))
+		for k, p := range ac.Profiles {
+			profilesMap[k] = map[string]string{
+				"api_base": p.APIBase,
+				"api_key":  p.APIKey,
+				"model":    p.Model,
+			}
+		}
+		viper.Set("ai.profiles", profilesMap)
+	}
+
+	// 2. 优先写入 config/ai.yaml 分片文件（保持原架构，不污染主 config.yaml）
+	if err := c.writeAIYaml(); err != nil {
+		return fmt.Errorf("写入 ai.yaml 失败: %w", err)
+	}
+	return nil
+}
+
+// writeAIYaml 把 c.AI 的所有字段序列化写回 config/ai.yaml 分片文件
+// 不锁，调用方负责加锁
+func (c *Config) writeAIYaml() error {
+	ac := c.AI
+	aiDirs := []string{"./config", "./data/config", "/etc/nowen-video/config"}
+	var targetFile string
+	for _, dir := range aiDirs {
+		filePath := filepath.Join(dir, "ai.yaml")
+		if _, err := os.Stat(filePath); err == nil {
+			targetFile = filePath
+			break
+		}
+	}
+	// 没找到现有 ai.yaml 分片文件时，默认写到 ./config/ai.yaml
+	if targetFile == "" {
+		// 确保目录存在
+		_ = os.MkdirAll("./config", 0o755)
+		targetFile = filepath.Join("./config", "ai.yaml")
+	}
+
+	subViper := viper.New()
+	subViper.SetConfigFile(targetFile)
+	// 读取已有内容，保留未由本结构覆盖的字段（如 whisper_*, ocr_*, sub_clean_* 等）
+	_ = subViper.ReadInConfig()
+
+	// 写入主字段
+	subViper.Set("enabled", ac.Enabled)
+	subViper.Set("provider", ac.Provider)
+	subViper.Set("api_base", ac.APIBase)
+	subViper.Set("api_key", ac.APIKey)
+	subViper.Set("model", ac.Model)
+	subViper.Set("timeout", ac.Timeout)
+	subViper.Set("enable_smart_search", ac.EnableSmartSearch)
+	subViper.Set("enable_recommend_reason", ac.EnableRecommendReason)
+	subViper.Set("enable_metadata_enhance", ac.EnableMetadataEnhance)
+	subViper.Set("monthly_budget", ac.MonthlyBudget)
+	subViper.Set("cache_ttl_hours", ac.CacheTTLHours)
+	subViper.Set("max_concurrent", ac.MaxConcurrent)
+	subViper.Set("request_interval_ms", ac.RequestIntervalMs)
+
+	if ac.Profiles != nil {
+		profilesMap := make(map[string]map[string]string, len(ac.Profiles))
+		for k, p := range ac.Profiles {
+			profilesMap[k] = map[string]string{
+				"api_base": p.APIBase,
+				"api_key":  p.APIKey,
+				"model":    p.Model,
+			}
+		}
+		subViper.Set("profiles", profilesMap)
+	}
+
+	return subViper.WriteConfigAs(targetFile)
 }
 
 // saveConfig 将当前配置写入配置文件

@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,6 +23,7 @@ import (
 	"github.com/nowen-video/nowen-video/internal/service/ffmpeg"
 	"github.com/shirou/gopsutil/v3/cpu"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
 // ==================== 预处理事件常量 ====================
@@ -61,10 +63,10 @@ type PreprocessService struct {
 	settingRepo *repository.SystemSettingRepo
 
 	// 工作协程控制
-	workerCount int32       // 当前活跃工作协程数
-	maxWorkers  int32       // 最大并发工作协程数（上限，固定为 1）
-	curWorkers  int32       // 当前动态调整后的并发数
-	jobQueue    chan string // 任务 ID 队列（单任务模式，仅允许 1 个任务同时处理）
+	workerCount int32       // 当前活跃工作协程数（0 或 1）
+	maxWorkers  int32       // 最大并发工作协程数（固定为 1，单任务串行）
+	curWorkers  int32       // 保留字段，仅用于兼容旧统计接口
+	jobQueue    chan string // 任务 ID 队列（单任务模式：同一时刻只有 1 个任务在跑，其余在队列中等待）
 	pausedJobs  sync.Map    // 暂停的任务 ID 集合
 	cancelJobs  sync.Map    // 取消的任务 ID 集合
 	runningJobs sync.Map    // 正在运行的任务 ID -> *exec.Cmd
@@ -104,16 +106,14 @@ func NewPreprocessService(
 	hwAccel string,
 	logger *zap.SugaredLogger,
 ) *PreprocessService {
-	// 【火力全开策略（方案1完整版）】worker 数量 = NumCPU，
-	// 让每个 CPU 核心都能同时跑一个预处理任务。
-	// FFmpeg 内部 threads=0（auto）和操作系统调度器会自动平衡状态，
-	// 不会因为并发过度导致 context switch 爆炸。
-	maxWorkers := int32(runtime.NumCPU())
-	if maxWorkers < 1 {
-		maxWorkers = 1
-	}
+	// 【单任务串行模式】预处理一次只处理一个视频。
+	// 由 FFmpeg 内部 threads=0（auto）充分利用多核，避免多视频并发导致：
+	//   - 磁盘 IO 抢占（HLS 切片是写密集型）
+	//   - 显存/编码器会话争用（硬件加速时尤其明显）
+	//   - 内存峰值不可控
+	maxWorkers := int32(1)
 
-	logger.Infof("预处理服务启动（火力全开模式）: maxWorkers=%d, hwAccel=%s, ffmpeg_threads=0(auto)",
+	logger.Infof("预处理服务启动（单任务串行模式）: maxWorkers=%d, hwAccel=%s, ffmpeg_threads=0(auto)",
 		maxWorkers, hwAccel)
 
 	s := &PreprocessService{
@@ -301,6 +301,475 @@ func (s *PreprocessService) SubmitLibrary(libraryID string, priority int) (int, 
 	return count, nil
 }
 
+// ==================== 自定义条件筛选预处理 ====================
+
+// PreprocessFilter 预处理筛选条件（多个条件之间是 AND 关系；同一条件内的多值是 IN 关系）
+type PreprocessFilter struct {
+	LibraryIDs   []string `json:"library_ids"`   // 限定媒体库（空 = 全部）
+	MediaTypes   []string `json:"media_types"`   // movie / episode（空 = 全部）
+	VideoCodecs  []string `json:"video_codecs"`  // h264 / hevc / av1 / vp9 ...（空 = 全部，大小写敏感按 DB 中存的来）
+	AudioCodecs  []string `json:"audio_codecs"`  // aac / ac3 / dts / flac ...
+	Containers   []string `json:"containers"`    // 容器格式：mp4 / mkv / avi / mov / ts / flv / webm（按文件扩展名匹配，不带点）
+	Resolutions  []string `json:"resolutions"`   // 1080p / 720p / 4K / 480p ...
+	Keyword      string   `json:"keyword"`       // 标题/番号模糊匹配
+	MinSizeBytes int64    `json:"min_size_bytes"` // 文件大小下限（字节，0 = 不限）
+	MaxSizeBytes int64    `json:"max_size_bytes"` // 文件大小上限（字节，0 = 不限）
+	MinYear      int      `json:"min_year"`       // 年份下限（0 = 不限）
+	MaxYear      int      `json:"max_year"`       // 年份上限（0 = 不限）
+	MinDuration  float64  `json:"min_duration"`   // 时长下限（秒，0 = 不限）
+	MaxDuration  float64  `json:"max_duration"`   // 时长上限（秒，0 = 不限）
+
+	// 排除策略（默认两项都为 true，由 handler 显式注入）
+	ExcludeAlreadyPreprocessed bool `json:"exclude_already_preprocessed"` // 排除已在 preprocess_tasks 中的（不论状态）
+	ExcludeDirectlyPlayable    bool `json:"exclude_directly_playable"`    // 排除浏览器可零转码直接播放的
+	ExcludeStrm                bool `json:"exclude_strm"`                 // 排除 STRM 远程流（默认 true，远程流不应被本地预处理）
+}
+
+// PreprocessFilterPreview 筛选预览结果
+type PreprocessFilterPreview struct {
+	MatchedCount     int                `json:"matched_count"`      // 命中数量（应用排除策略后）
+	RawCount         int                `json:"raw_count"`          // 仅按筛选条件命中的数量（未应用排除）
+	ExcludedAlready  int                `json:"excluded_already"`   // 因"已存在 task"而排除的数量
+	ExcludedPlayable int                `json:"excluded_playable"`  // 因"可直接播放"而排除的数量
+	ExcludedStrm     int                `json:"excluded_strm"`      // 因 STRM 而排除的数量
+	TotalSize        int64              `json:"total_size"`         // 命中媒体的总文件大小（源文件，非预处理产物）
+	Sample           []PreprocessSample `json:"sample"`             // 抽样列表（最多 50 条，按更新时间倒序）
+	CodecHistogram   map[string]int     `json:"codec_histogram"`    // 命中媒体按 video_codec 分布
+	ResolutionHist   map[string]int     `json:"resolution_hist"`    // 命中媒体按分辨率分布
+}
+
+// PreprocessSample 预览中的一条媒体样例
+type PreprocessSample struct {
+	MediaID    string  `json:"media_id"`
+	Title      string  `json:"title"`
+	Year       int     `json:"year"`
+	MediaType  string  `json:"media_type"`
+	VideoCodec string  `json:"video_codec"`
+	AudioCodec string  `json:"audio_codec"`
+	Resolution string  `json:"resolution"`
+	Duration   float64 `json:"duration"`
+	FileSize   int64   `json:"file_size"`
+	FilePath   string  `json:"file_path"`
+}
+
+// applyFilterToQuery 把筛选条件转成 GORM where（不含排除策略）
+func applyFilterToQuery(db *gorm.DB, f *PreprocessFilter) *gorm.DB {
+	q := db.Model(&model.Media{})
+
+	if len(f.LibraryIDs) > 0 {
+		q = q.Where("library_id IN ?", f.LibraryIDs)
+	}
+	if len(f.MediaTypes) > 0 {
+		q = q.Where("media_type IN ?", f.MediaTypes)
+	}
+	if len(f.VideoCodecs) > 0 {
+		q = q.Where("LOWER(video_codec) IN ?", lowerSlice(f.VideoCodecs))
+	}
+	if len(f.AudioCodecs) > 0 {
+		q = q.Where("LOWER(audio_codec) IN ?", lowerSlice(f.AudioCodecs))
+	}
+	if len(f.Resolutions) > 0 {
+		q = q.Where("resolution IN ?", f.Resolutions)
+	}
+	if len(f.Containers) > 0 {
+		// 按 file_path 后缀做不区分大小写匹配；SQLite 用 LOWER 兼容
+		var clauses []string
+		var args []any
+		for _, ext := range f.Containers {
+			ext = strings.TrimPrefix(strings.ToLower(strings.TrimSpace(ext)), ".")
+			if ext == "" {
+				continue
+			}
+			clauses = append(clauses, "LOWER(file_path) LIKE ?")
+			args = append(args, "%."+ext)
+		}
+		if len(clauses) > 0 {
+			q = q.Where("("+strings.Join(clauses, " OR ")+")", args...)
+		}
+	}
+	if f.Keyword != "" {
+		k := "%" + f.Keyword + "%"
+		q = q.Where("title LIKE ? OR orig_title LIKE ? OR num LIKE ?", k, k, k)
+	}
+	if f.MinSizeBytes > 0 {
+		q = q.Where("file_size >= ?", f.MinSizeBytes)
+	}
+	if f.MaxSizeBytes > 0 {
+		q = q.Where("file_size <= ?", f.MaxSizeBytes)
+	}
+	if f.MinYear > 0 {
+		q = q.Where("year >= ?", f.MinYear)
+	}
+	if f.MaxYear > 0 {
+		q = q.Where("year <= ?", f.MaxYear)
+	}
+	if f.MinDuration > 0 {
+		q = q.Where("duration >= ?", f.MinDuration)
+	}
+	if f.MaxDuration > 0 {
+		q = q.Where("duration <= ?", f.MaxDuration)
+	}
+	return q
+}
+
+func lowerSlice(in []string) []string {
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		out = append(out, strings.ToLower(strings.TrimSpace(s)))
+	}
+	return out
+}
+
+// resolveFilterMediaIDs 根据筛选条件和排除策略，得到最终需要处理的 mediaID 列表，
+// 同时返回完整命中媒体（用于预览统计）和各项排除数。
+func (s *PreprocessService) resolveFilterMediaIDs(f *PreprocessFilter) (
+	matched []model.Media,
+	excludedAlready int,
+	excludedPlayable int,
+	excludedStrm int,
+	rawCount int,
+	err error,
+) {
+	q := applyFilterToQuery(s.mediaRepo.DB(), f)
+	var all []model.Media
+	if err = q.Order("updated_at DESC").Find(&all).Error; err != nil {
+		return
+	}
+	rawCount = len(all)
+
+	// 一次性查出已存在 task 的 media_id 集合（包括所有状态：完成/失败/进行中），避免 N+1
+	already := make(map[string]struct{})
+	if f.ExcludeAlreadyPreprocessed {
+		var ids []string
+		if e := s.repo.DB().Model(&model.PreprocessTask{}).
+			Distinct("media_id").
+			Pluck("media_id", &ids).Error; e == nil {
+			for _, id := range ids {
+				already[id] = struct{}{}
+			}
+		}
+	}
+
+	matched = make([]model.Media, 0, len(all))
+	for i := range all {
+		m := &all[i]
+		if f.ExcludeStrm && m.StreamURL != "" {
+			excludedStrm++
+			continue
+		}
+		if f.ExcludeDirectlyPlayable && canMediaPlayDirectly(m) {
+			excludedPlayable++
+			continue
+		}
+		if f.ExcludeAlreadyPreprocessed {
+			if _, ok := already[m.ID]; ok {
+				excludedAlready++
+				continue
+			}
+		}
+		matched = append(matched, *m)
+	}
+	return
+}
+
+// PreviewFilter 预览：只统计、不入队
+func (s *PreprocessService) PreviewFilter(f *PreprocessFilter) (*PreprocessFilterPreview, error) {
+	matched, excAlready, excPlayable, excStrm, rawCount, err := s.resolveFilterMediaIDs(f)
+	if err != nil {
+		return nil, err
+	}
+
+	preview := &PreprocessFilterPreview{
+		MatchedCount:     len(matched),
+		RawCount:         rawCount,
+		ExcludedAlready:  excAlready,
+		ExcludedPlayable: excPlayable,
+		ExcludedStrm:     excStrm,
+		CodecHistogram:   make(map[string]int),
+		ResolutionHist:   make(map[string]int),
+		Sample:           make([]PreprocessSample, 0, 50),
+	}
+
+	for i, m := range matched {
+		preview.TotalSize += m.FileSize
+
+		codec := strings.ToLower(strings.TrimSpace(m.VideoCodec))
+		if codec == "" {
+			codec = "unknown"
+		}
+		preview.CodecHistogram[codec]++
+
+		res := strings.TrimSpace(m.Resolution)
+		if res == "" {
+			res = "unknown"
+		}
+		preview.ResolutionHist[res]++
+
+		if i < 50 {
+			preview.Sample = append(preview.Sample, PreprocessSample{
+				MediaID:    m.ID,
+				Title:      m.Title,
+				Year:       m.Year,
+				MediaType:  m.MediaType,
+				VideoCodec: m.VideoCodec,
+				AudioCodec: m.AudioCodec,
+				Resolution: m.Resolution,
+				Duration:   m.Duration,
+				FileSize:   m.FileSize,
+				FilePath:   m.FilePath,
+			})
+		}
+	}
+	return preview, nil
+}
+
+// SubmitByFilter 按筛选条件批量提交预处理。
+//
+// 行为：
+//   - 应用 PreprocessFilter 筛选媒体；
+//   - 调用 SubmitMedia（force 由调用方传入）逐条入队，跳过已存在活跃任务的；
+//   - 返回成功入队数量、跳过数量。
+func (s *PreprocessService) SubmitByFilter(f *PreprocessFilter, priority int, force bool) (submitted int, skipped int, err error) {
+	matched, _, _, _, _, e := s.resolveFilterMediaIDs(f)
+	if e != nil {
+		err = e
+		return
+	}
+	for _, m := range matched {
+		if _, e2 := s.SubmitMedia(m.ID, priority, force); e2 != nil {
+			s.logger.Debugf("按条件提交跳过 %s: %v", m.ID, e2)
+			skipped++
+			continue
+		}
+		submitted++
+	}
+	s.logger.Infof("按条件预处理：匹配 %d，提交 %d，跳过 %d", len(matched), submitted, skipped)
+	return
+}
+
+// ==================== 候选影视列表（手动选择预处理） ====================
+
+// PreprocessCandidateParams 候选列表查询参数
+type PreprocessCandidateParams struct {
+	Page              int    // 从 1 起
+	Size              int    // 每页条数（默认 20，最大 200）
+	Keyword           string // 标题/番号模糊匹配
+	LibraryID         string // 媒体库 ID（空 = 全部）
+	MediaType         string // movie / episode（空 = 全部）
+	VideoCodec        string // 视频编码过滤（空 = 全部）
+	OnlyNeedPreprocess bool  // 仅显示"需要预处理"的（排除已完成 + 排除可直接播放 + 排除 STRM）
+	SortBy            string // updated_at(默认) / file_size / duration / year
+	SortOrder         string // desc(默认) / asc
+}
+
+// PreprocessCandidate 候选条目（供前端勾选）
+type PreprocessCandidate struct {
+	MediaID          string  `json:"media_id"`
+	Title            string  `json:"title"`
+	OrigTitle        string  `json:"orig_title,omitempty"`
+	Year             int     `json:"year"`
+	LibraryID        string  `json:"library_id"`
+	MediaType        string  `json:"media_type"`
+	VideoCodec       string  `json:"video_codec"`
+	AudioCodec       string  `json:"audio_codec"`
+	Resolution       string  `json:"resolution"`
+	Duration         float64 `json:"duration"`
+	FileSize         int64   `json:"file_size"`
+	FilePath         string  `json:"file_path"`
+	PosterPath       string  `json:"poster_path"`
+	IsStrm           bool    `json:"is_strm"`            // STRM 远程流（不可预处理）
+	CanPlayDirectly  bool    `json:"can_play_directly"`  // 浏览器零转码可直接播放
+	PreprocessStatus string  `json:"preprocess_status"`  // none / pending / queued / running / paused / completed / failed / cancelled
+	TaskID           string  `json:"task_id,omitempty"`  // 对应预处理任务 ID（若存在）
+	// 剧集专属（仅 media_type=episode 时有意义）
+	SeasonNum    int    `json:"season_num,omitempty"`
+	EpisodeNum   int    `json:"episode_num,omitempty"`
+	EpisodeTitle string `json:"episode_title,omitempty"`
+	// 刮削状态：pending / scraped / partial / failed / manual
+	// 前端用它来判断是否给"未刮削"提示并改用源文件名展示
+	ScrapeStatus string `json:"scrape_status,omitempty"`
+}
+
+// PreprocessCandidateList 候选列表响应
+type PreprocessCandidateList struct {
+	Items []PreprocessCandidate `json:"items"`
+	Total int64                 `json:"total"`
+	Page  int                   `json:"page"`
+	Size  int                   `json:"size"`
+}
+
+// ListCandidateMedia 列出可被手动选择预处理的影视文件。
+//
+// 与"自定义筛选"不同，本接口面向"逐条浏览 + 勾选"交互：
+//   - 默认按 updated_at 倒序，方便用户看到新入库的媒体；
+//   - 不强制排除任何状态，但返回 preprocess_status / is_strm / can_play_directly
+//     等字段供前端做徽标/禁用判断；
+//   - 可选 OnlyNeedPreprocess=true 时，过滤掉"已完成预处理 / 可直接播放 / STRM"的项。
+func (s *PreprocessService) ListCandidateMedia(p PreprocessCandidateParams) (*PreprocessCandidateList, error) {
+	if p.Page < 1 {
+		p.Page = 1
+	}
+	if p.Size <= 0 {
+		p.Size = 20
+	}
+	if p.Size > 200 {
+		p.Size = 200
+	}
+
+	q := s.mediaRepo.DB().Model(&model.Media{})
+
+	if p.LibraryID != "" {
+		q = q.Where("library_id = ?", p.LibraryID)
+	}
+	if p.MediaType != "" {
+		q = q.Where("media_type = ?", p.MediaType)
+	}
+	if p.VideoCodec != "" {
+		q = q.Where("LOWER(video_codec) = ?", strings.ToLower(strings.TrimSpace(p.VideoCodec)))
+	}
+	if p.Keyword != "" {
+		k := "%" + p.Keyword + "%"
+		q = q.Where("title LIKE ? OR orig_title LIKE ? OR num LIKE ?", k, k, k)
+	}
+
+	// 排序
+	sortField := "updated_at"
+	switch p.SortBy {
+	case "file_size", "duration", "year":
+		sortField = p.SortBy
+	}
+	order := "DESC"
+	if strings.EqualFold(p.SortOrder, "asc") {
+		order = "ASC"
+	}
+
+	// OnlyNeedPreprocess 模式下，预筛掉 STRM（在 SQL 层完成，减少返回行数）
+	if p.OnlyNeedPreprocess {
+		q = q.Where("stream_url = ?", "")
+	}
+
+	var total int64
+	if err := q.Count(&total).Error; err != nil {
+		return nil, fmt.Errorf("统计候选媒体失败: %w", err)
+	}
+
+	// 取数据
+	var medias []model.Media
+	offset := (p.Page - 1) * p.Size
+
+	// OnlyNeedPreprocess 模式下需要后置二次过滤（canMediaPlayDirectly 与 task 状态需要应用层判断），
+	// 因此先多取一些（最多 5 倍），再裁剪；普通模式直接按分页取。
+	if p.OnlyNeedPreprocess {
+		// 后置过滤场景，全量加载已 SQL 过滤后的结果（数量已显著减少：strm 已排除）
+		if err := q.Order(sortField + " " + order).Find(&medias).Error; err != nil {
+			return nil, fmt.Errorf("查询候选媒体失败: %w", err)
+		}
+	} else {
+		if err := q.Order(sortField + " " + order).Offset(offset).Limit(p.Size).Find(&medias).Error; err != nil {
+			return nil, fmt.Errorf("查询候选媒体失败: %w", err)
+		}
+	}
+
+	if len(medias) == 0 {
+		return &PreprocessCandidateList{
+			Items: []PreprocessCandidate{},
+			Total: total,
+			Page:  p.Page,
+			Size:  p.Size,
+		}, nil
+	}
+
+	// 一次性查出这些媒体的预处理任务状态（取最新一条），避免 N+1
+	mediaIDs := make([]string, 0, len(medias))
+	for i := range medias {
+		mediaIDs = append(mediaIDs, medias[i].ID)
+	}
+
+	taskByMedia := make(map[string]*model.PreprocessTask, len(mediaIDs))
+	{
+		var tasks []model.PreprocessTask
+		if err := s.repo.DB().
+			Model(&model.PreprocessTask{}).
+			Where("media_id IN ?", mediaIDs).
+			Order("created_at DESC").
+			Find(&tasks).Error; err == nil {
+			for i := range tasks {
+				t := &tasks[i]
+				if _, ok := taskByMedia[t.MediaID]; !ok {
+					// 由于 ORDER BY created_at DESC，第一次出现即最新
+					taskByMedia[t.MediaID] = t
+				}
+			}
+		}
+	}
+
+	items := make([]PreprocessCandidate, 0, len(medias))
+	for i := range medias {
+		m := &medias[i]
+		isStrm := m.StreamURL != ""
+		canPlay := !isStrm && canMediaPlayDirectly(m)
+
+		status := "none"
+		var taskID string
+		if t, ok := taskByMedia[m.ID]; ok {
+			status = t.Status
+			taskID = t.ID
+		}
+
+		// OnlyNeedPreprocess 后置过滤：去掉"已完成 / 可直接播放 / STRM"
+		if p.OnlyNeedPreprocess {
+			if isStrm || canPlay || status == "completed" {
+				continue
+			}
+		}
+
+		items = append(items, PreprocessCandidate{
+			MediaID:          m.ID,
+			Title:            m.Title,
+			OrigTitle:        m.OrigTitle,
+			Year:             m.Year,
+			LibraryID:        m.LibraryID,
+			MediaType:        m.MediaType,
+			VideoCodec:       m.VideoCodec,
+			AudioCodec:       m.AudioCodec,
+			Resolution:       m.Resolution,
+			Duration:         m.Duration,
+			FileSize:         m.FileSize,
+			FilePath:         m.FilePath,
+			PosterPath:       m.PosterPath,
+			IsStrm:           isStrm,
+			CanPlayDirectly:  canPlay,
+			PreprocessStatus: status,
+			TaskID:           taskID,
+			SeasonNum:        m.SeasonNum,
+			EpisodeNum:       m.EpisodeNum,
+			EpisodeTitle:     m.EpisodeTitle,
+			ScrapeStatus:     m.ScrapeStatus,
+		})
+	}
+
+	// OnlyNeedPreprocess 模式下应用应用层分页
+	if p.OnlyNeedPreprocess {
+		total = int64(len(items))
+		start := offset
+		end := offset + p.Size
+		if start > len(items) {
+			start = len(items)
+		}
+		if end > len(items) {
+			end = len(items)
+		}
+		items = items[start:end]
+	}
+
+	return &PreprocessCandidateList{
+		Items: items,
+		Total: total,
+		Page:  p.Page,
+		Size:  p.Size,
+	}, nil
+}
+
 // PauseTask 暂停任务
 func (s *PreprocessService) PauseTask(taskID string) error {
 	task, err := s.repo.FindByID(taskID)
@@ -418,9 +887,10 @@ func (s *PreprocessService) ListTasks(page, pageSize int, status string) ([]mode
 		return tasks, total, err
 	}
 	// 用关联的 Media 信息补充/修正 media_title（兼容旧任务缺少集数信息的情况）
+	// 列表展示场景使用 DescriptiveTitle：电影会附带年份和原始标题，方便辨识。
 	for i := range tasks {
 		if tasks[i].Media.ID != "" {
-			tasks[i].MediaTitle = tasks[i].Media.DisplayTitle()
+			tasks[i].MediaTitle = tasks[i].Media.DescriptiveTitle()
 		}
 	}
 	return tasks, total, err
@@ -438,7 +908,7 @@ func (s *PreprocessService) GetStatistics() map[string]interface{} {
 		"active_workers": atomic.LoadInt32(&s.workerCount),
 		"queue_size":     len(s.jobQueue),
 		"hw_accel":       s.hwAccel,
-		"mode":           "best-performance", // 最佳性能模式
+		"mode":           "single-task", // 单任务串行模式
 	}
 }
 
@@ -535,6 +1005,561 @@ func (s *PreprocessService) CleanPreprocessCache(mediaID string) error {
 		s.repo.Update(task)
 	}
 	return nil
+}
+
+// ==================== 存储占用统计 ====================
+
+// PreprocessStorageItem 单个媒体的预处理产物占用
+type PreprocessStorageItem struct {
+	MediaID    string `json:"media_id"`
+	MediaTitle string `json:"media_title"`
+	TaskID     string `json:"task_id,omitempty"`     // 关联的 task ID（孤儿目录为空）
+	Status     string `json:"status,omitempty"`      // 关联 task 的状态（孤儿目录为 "orphan"）
+	OutputDir  string `json:"output_dir"`            // 物理目录绝对路径
+	Size       int64  `json:"size"`                  // 字节数
+	IsOrphan   bool   `json:"is_orphan"`             // 是否为孤儿目录（DB 中无对应 task）
+}
+
+// PreprocessStorageUsage 预处理总占用统计响应体
+type PreprocessStorageUsage struct {
+	RootDir       string                  `json:"root_dir"`        // 预处理根目录
+	TotalSize     int64                   `json:"total_size"`      // 总占用字节数（含孤儿）
+	TotalCount    int                     `json:"total_count"`     // 占用空间的目录总数
+	TaskSize      int64                   `json:"task_size"`       // DB 中 task 对应的占用
+	OrphanSize    int64                   `json:"orphan_size"`     // 无主目录占用
+	OrphanCount   int                     `json:"orphan_count"`    // 无主目录数量
+	Items         []PreprocessStorageItem `json:"items"`           // 按 size 降序，最多返回 limit 条
+	ScannedAt     time.Time               `json:"scanned_at"`      // 扫描时间
+	ScanDurationMs int64                  `json:"scan_duration_ms"` // 扫描耗时（毫秒）
+}
+
+// ==================== 缓存总览（cache/ 整盘） ====================
+
+// CacheCategory 缓存目录分类条目
+type CacheCategory struct {
+	Key       string `json:"key"`        // preprocess / transcode / abr / thumbnails / images / subtitles / downloads / webdav_download / plugins / other / ...
+	Label     string `json:"label"`     // 中文展示名
+	Path      string `json:"path"`      // 子目录绝对路径
+	Size      int64  `json:"size"`      // 字节数
+	Count     int    `json:"count"`     // 文件数量
+	Cleanable bool   `json:"cleanable"` // 是否安全可清空（删后会自动重生成且不影响业务）
+}
+
+// CacheUsage cache/ 总目录占用统计响应体
+type CacheUsage struct {
+	RootDir        string          `json:"root_dir"`         // cache 根目录
+	TotalSize      int64           `json:"total_size"`       // 整个 cache 字节数
+	TotalCount     int             `json:"total_count"`      // 整个 cache 文件数
+	Categories     []CacheCategory `json:"categories"`       // 按 size 降序的一级子目录分类
+	ScannedAt      time.Time       `json:"scanned_at"`       // 扫描时间
+	ScanDurationMs int64           `json:"scan_duration_ms"` // 扫描耗时（毫秒）
+	FromCache      bool            `json:"from_cache"`       // 是否取自内存缓存（命中即跳过扫盘）
+}
+
+// 一级子目录元信息（标签 / 是否可清）
+// 未在表内的目录归为 "other"，cleanable 默认 false。
+var cacheCategoryMeta = map[string]struct {
+	Label     string
+	Cleanable bool
+}{
+	"preprocess":      {"预处理产物", true},  // 用 CleanOrphan 清孤儿；当前接口仅描述，不直接清空
+	"transcode":       {"在线转码缓存", true}, // 删除后重新点播会重新生成
+	"abr":             {"自适应码率缓存", true},
+	"thumbnails":      {"缩略图/雪碧图", true},   // 重新扫描或播放时会重新生成
+	"images":          {"海报/封面", false},     // 删除会影响列表显示，需重新刮削
+	"subtitles":       {"字幕缓存", false},     // AI 字幕在子目录内，整体不默认可清
+	"downloads":       {"离线下载", false},     // 用户主动下载，不属于"缓存"
+	"webdav_download": {"WebDAV 临时下载", true},
+	"plugins":         {"插件资源", false},
+}
+
+var (
+	cacheUsageMu     sync.Mutex
+	cacheUsageCached *CacheUsage
+	cacheUsageExpire time.Time
+)
+
+const cacheUsageTTL = 30 * time.Second
+
+// invalidateCacheUsage 让缓存失效，下一次调用强制扫盘
+// 调用方：CleanOrphanCache、预处理任务完成（如需）等改变 cache/ 内容的地方
+func (s *PreprocessService) invalidateCacheUsage() {
+	cacheUsageMu.Lock()
+	cacheUsageCached = nil
+	cacheUsageExpire = time.Time{}
+	cacheUsageMu.Unlock()
+}
+
+// GetCacheUsage 统计整个 cache/ 目录的占用，按一级子目录归类
+//
+// 实现策略：
+//  1. 30s 内存缓存命中即返回（FromCache=true），避免高频全盘扫描；force=true 跳过缓存
+//  2. ReadDir 一级子目录，对每个一级目录 walk 一次累加 size+count
+//  3. 未在 cacheCategoryMeta 中登记的目录归为 "other"（label = 子目录名），cleanable=false
+//  4. 按 size 降序排序
+func (s *PreprocessService) GetCacheUsage(force bool) (*CacheUsage, error) {
+	if !force {
+		cacheUsageMu.Lock()
+		if cacheUsageCached != nil && time.Now().Before(cacheUsageExpire) {
+			// 复制一份，标记 from_cache=true，避免外部修改影响内部缓存
+			cp := *cacheUsageCached
+			cp.FromCache = true
+			cacheUsageMu.Unlock()
+			return &cp, nil
+		}
+		cacheUsageMu.Unlock()
+	}
+
+	start := time.Now()
+	rootDir := s.cfg.Cache.CacheDir
+	usage := &CacheUsage{
+		RootDir:    rootDir,
+		Categories: []CacheCategory{},
+		ScannedAt:  start,
+	}
+
+	entries, err := os.ReadDir(rootDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			usage.ScanDurationMs = time.Since(start).Milliseconds()
+			return usage, nil
+		}
+		return nil, fmt.Errorf("读取 cache 根目录失败: %w", err)
+	}
+
+	cats := make([]CacheCategory, 0, len(entries))
+	for _, e := range entries {
+		if !e.IsDir() {
+			// cache/ 下偶尔会有顶层文件，归到 other
+			fi, ferr := e.Info()
+			if ferr != nil {
+				continue
+			}
+			usage.TotalSize += fi.Size()
+			usage.TotalCount++
+			continue
+		}
+		name := e.Name()
+		dir := filepath.Join(rootDir, name)
+		size, count, werr := dirSizeAndCount(dir)
+		if werr != nil {
+			s.logger.Warnf("统计缓存子目录失败 %s: %v", dir, werr)
+			continue
+		}
+
+		meta, known := cacheCategoryMeta[name]
+		key := name
+		label := name
+		cleanable := false
+		if known {
+			label = meta.Label
+			cleanable = meta.Cleanable
+		} else {
+			key = "other:" + name
+		}
+
+		cats = append(cats, CacheCategory{
+			Key:       key,
+			Label:     label,
+			Path:      dir,
+			Size:      size,
+			Count:     count,
+			Cleanable: cleanable,
+		})
+		usage.TotalSize += size
+		usage.TotalCount += count
+	}
+
+	sort.Slice(cats, func(i, j int) bool { return cats[i].Size > cats[j].Size })
+	usage.Categories = cats
+	usage.ScanDurationMs = time.Since(start).Milliseconds()
+
+	// 写入缓存
+	cacheUsageMu.Lock()
+	cacheUsageCached = usage
+	cacheUsageExpire = time.Now().Add(cacheUsageTTL)
+	cacheUsageMu.Unlock()
+
+	return usage, nil
+}
+
+// dirSizeAndCount 一次遍历同时累加目录字节数与文件数
+func dirSizeAndCount(root string) (int64, int, error) {
+	var total int64
+	var count int
+	err := filepath.Walk(root, func(_ string, info os.FileInfo, err error) error {
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		if !info.IsDir() {
+			total += info.Size()
+			count++
+		}
+		return nil
+	})
+	if os.IsNotExist(err) {
+		return 0, 0, nil
+	}
+	return total, count, err
+}
+
+// dirSize 递归统计目录占用字节数；目录不存在返回 0, nil
+func dirSize(root string) (int64, error) {
+	var total int64
+	err := filepath.Walk(root, func(_ string, info os.FileInfo, err error) error {
+		if err != nil {
+			// 容忍单个文件读取失败，不中断整体统计
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		if !info.IsDir() {
+			total += info.Size()
+		}
+		return nil
+	})
+	if os.IsNotExist(err) {
+		return 0, nil
+	}
+	return total, err
+}
+
+// GetStorageUsage 统计预处理产物的磁盘占用
+//
+// limit: 返回的明细条目数上限（按 size 降序），0 或负数表示不限制
+//
+// 实现策略：
+//  1. 扫描根目录 {CacheDir}/preprocess/ 下所有一级子目录（每个子目录名 = mediaID）
+//  2. 对每个 mediaID 调用 dirSize 计算占用
+//  3. 与 DB 中的 PreprocessTask 比对：能匹配上的标记 task 状态；匹配不上的标记 is_orphan=true
+//  4. 按 size 降序取前 limit 条
+func (s *PreprocessService) GetStorageUsage(limit int) (*PreprocessStorageUsage, error) {
+	start := time.Now()
+	rootDir := filepath.Join(s.cfg.Cache.CacheDir, "preprocess")
+
+	usage := &PreprocessStorageUsage{
+		RootDir:   rootDir,
+		Items:     []PreprocessStorageItem{},
+		ScannedAt: start,
+	}
+
+	// 根目录可能尚未创建（从未跑过预处理）
+	entries, err := os.ReadDir(rootDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			usage.ScanDurationMs = time.Since(start).Milliseconds()
+			return usage, nil
+		}
+		return nil, fmt.Errorf("读取预处理根目录失败: %w", err)
+	}
+
+	// 一次性把 DB 中的 task 拉出来建索引（按 mediaID -> 最新 task）
+	allTasks, err := s.repo.ListAllForUsage()
+	if err != nil {
+		// DB 出错不阻塞磁盘统计，只是丢失 task 信息
+		s.logger.Warnf("查询预处理任务列表失败: %v", err)
+	}
+	taskByMedia := make(map[string]*model.PreprocessTask, len(allTasks))
+	for i := range allTasks {
+		t := &allTasks[i]
+		// 同一 mediaID 可能有多条记录，保留最新一条（创建时间最大）
+		if cur, ok := taskByMedia[t.MediaID]; !ok || t.CreatedAt.After(cur.CreatedAt) {
+			taskByMedia[t.MediaID] = t
+		}
+	}
+
+	items := make([]PreprocessStorageItem, 0, len(entries))
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		mediaID := e.Name()
+		dir := filepath.Join(rootDir, mediaID)
+		size, err := dirSize(dir)
+		if err != nil {
+			s.logger.Warnf("统计预处理目录占用失败 %s: %v", dir, err)
+			continue
+		}
+		if size == 0 {
+			continue
+		}
+
+		item := PreprocessStorageItem{
+			MediaID:   mediaID,
+			OutputDir: dir,
+			Size:      size,
+		}
+		if t, ok := taskByMedia[mediaID]; ok {
+			item.TaskID = t.ID
+			item.Status = t.Status
+			item.MediaTitle = t.MediaTitle
+		} else {
+			item.IsOrphan = true
+			item.Status = "orphan"
+			usage.OrphanSize += size
+			usage.OrphanCount++
+		}
+		usage.TotalSize += size
+		usage.TotalCount++
+		items = append(items, item)
+	}
+	usage.TaskSize = usage.TotalSize - usage.OrphanSize
+
+	// 按 size 降序
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].Size > items[j].Size
+	})
+	if limit > 0 && len(items) > limit {
+		items = items[:limit]
+	}
+	usage.Items = items
+	usage.ScanDurationMs = time.Since(start).Milliseconds()
+	return usage, nil
+}
+
+// CleanOrphanCache 清理所有孤儿预处理目录（DB 中没有对应 task 的）
+// 返回清理的目录数和总释放字节数
+func (s *PreprocessService) CleanOrphanCache() (int, int64, error) {
+	usage, err := s.GetStorageUsage(0) // 0 = 不限条目
+	if err != nil {
+		return 0, 0, err
+	}
+	var freed int64
+	cleaned := 0
+	for _, it := range usage.Items {
+		if !it.IsOrphan {
+			continue
+		}
+		if err := os.RemoveAll(it.OutputDir); err != nil {
+			s.logger.Warnf("清理孤儿目录失败 %s: %v", it.OutputDir, err)
+			continue
+		}
+		freed += it.Size
+		cleaned++
+	}
+	if cleaned > 0 {
+		s.logger.Infof("已清理 %d 个孤儿预处理目录，释放 %d 字节", cleaned, freed)
+		s.invalidateCacheUsage()
+	}
+	return cleaned, freed, nil
+}
+
+// CleanPreprocessAll 清空所有预处理产物（保护正在运行的任务）
+//
+// 行为：
+//   - 遍历 cache/preprocess 下所有子目录
+//   - 跳过对应 task.Status == "running" 的目录（避免删掉 ffmpeg 正在写的文件）
+//   - 其它所有目录（pending/queued/completed/failed/cancelled，以及孤儿）一律 RemoveAll
+//   - 对应 DB 任务（非孤儿且非 running）重置为 pending，清除产物路径，下次播放会重新生成
+//
+// 返回值：cleaned=被删除的目录数，freed=释放字节，skipped=因 running 跳过的目录数
+func (s *PreprocessService) CleanPreprocessAll() (cleaned int, freed int64, skipped int, err error) {
+	usage, err := s.GetStorageUsage(0)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	for _, it := range usage.Items {
+		// 保护正在运行的任务
+		if it.Status == "running" {
+			skipped++
+			continue
+		}
+		if rmErr := os.RemoveAll(it.OutputDir); rmErr != nil {
+			s.logger.Warnf("清理预处理目录失败 %s: %v", it.OutputDir, rmErr)
+			continue
+		}
+		freed += it.Size
+		cleaned++
+		// 非孤儿目录：重置 DB 任务为 pending，清空产物字段
+		if !it.IsOrphan && it.MediaID != "" {
+			if task, fErr := s.repo.FindByMediaID(it.MediaID); fErr == nil && task != nil {
+				task.Status = "pending"
+				task.HLSMasterPath = ""
+				task.Variants = ""
+				task.ThumbnailPath = ""
+				task.KeyframesDir = ""
+				task.Progress = 0
+				task.Phase = ""
+				task.Message = "缓存已清理，等待重新处理"
+				if uErr := s.repo.Update(task); uErr != nil {
+					s.logger.Warnf("重置任务状态失败 media=%s: %v", it.MediaID, uErr)
+				}
+			}
+		}
+	}
+	if cleaned > 0 || skipped > 0 {
+		s.logger.Infof("已清空预处理产物：删除 %d 个目录，释放 %d 字节，跳过 %d 个运行中任务", cleaned, freed, skipped)
+		s.invalidateCacheUsage()
+	}
+	return cleaned, freed, skipped, nil
+}
+
+// ==================== 分类缓存清理 ====================
+
+// CleanCategoryResult 单个分类的清理结果
+type CleanCategoryResult struct {
+	Key         string `json:"key"`          // preprocess / transcode / abr / thumbnails / webdav_download / ...
+	Label       string `json:"label"`        // 中文展示名
+	FreedBytes  int64  `json:"freed_bytes"`  // 释放字节数（实际或估算）
+	FreedCount  int    `json:"freed_count"`  // 删除的目录/文件数（按分类语义不同）
+	Skipped     bool   `json:"skipped"`      // 是否被跳过（不可清理 / 目录不存在）
+	SkippedNote string `json:"skipped_note"` // 跳过原因
+}
+
+// CleanCacheCategory 清空单个分类目录下的所有内容（仅对 cleanable=true 的分类生效）
+//
+// 实现规则：
+//   - preprocess：根据 mode 区分
+//     · mode == "orphan"：只清孤儿（数据库无对应任务记录）
+//     · mode == "all" 或空：清所有非 running 任务的产物（默认行为，真正释放空间）
+//   - 其它 cleanable 分类（transcode / abr / thumbnails / webdav_download 等）：
+//     先统计目录大小，再 RemoveAll 整个一级子目录，最后重建空目录以便后续写入
+//   - 未登记的 "other:*" 分类一律拒绝（cleanable=false）
+//
+// 返回值除报错外，统一通过 CleanCategoryResult 表达"实际释放了多少"。
+func (s *PreprocessService) CleanCacheCategory(key string, mode string) (*CleanCategoryResult, error) {
+	// preprocess：默认走"全清"，mode=orphan 才仅清孤儿
+	if key == "preprocess" {
+		if mode == "orphan" {
+			cleaned, freed, err := s.CleanOrphanCache()
+			if err != nil {
+				return nil, err
+			}
+			return &CleanCategoryResult{
+				Key:        "preprocess",
+				Label:      cacheCategoryMeta["preprocess"].Label,
+				FreedBytes: freed,
+				FreedCount: cleaned,
+			}, nil
+		}
+		cleaned, freed, skipped, err := s.CleanPreprocessAll()
+		if err != nil {
+			return nil, err
+		}
+		note := ""
+		if skipped > 0 {
+			note = fmt.Sprintf("已跳过 %d 个正在运行的任务", skipped)
+		}
+		return &CleanCategoryResult{
+			Key:         "preprocess",
+			Label:       cacheCategoryMeta["preprocess"].Label,
+			FreedBytes:  freed,
+			FreedCount:  cleaned,
+			SkippedNote: note,
+		}, nil
+	}
+
+	meta, known := cacheCategoryMeta[key]
+	if !known {
+		return nil, fmt.Errorf("未知分类: %s", key)
+	}
+	if !meta.Cleanable {
+		return nil, fmt.Errorf("分类 %s 不允许清理", key)
+	}
+
+	dir := filepath.Join(s.cfg.Cache.CacheDir, key)
+	info, err := os.Stat(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return &CleanCategoryResult{
+				Key:         key,
+				Label:       meta.Label,
+				Skipped:     true,
+				SkippedNote: "目录不存在",
+			}, nil
+		}
+		return nil, err
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("%s 不是目录", dir)
+	}
+
+	// 先统计大小（用于返回值）
+	var size int64
+	var count int
+	_ = filepath.Walk(dir, func(_ string, fi os.FileInfo, werr error) error {
+		if werr != nil {
+			return nil
+		}
+		if !fi.IsDir() {
+			size += fi.Size()
+			count++
+		}
+		return nil
+	})
+
+	if err := os.RemoveAll(dir); err != nil {
+		return nil, fmt.Errorf("删除 %s 失败: %w", dir, err)
+	}
+	// 重建空目录，方便后续写入
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		s.logger.Warnf("重建分类目录失败 %s: %v", dir, err)
+	}
+
+	s.logger.Infof("已清空缓存分类 %s（%s），释放 %d 字节，%d 个文件", key, meta.Label, size, count)
+	s.invalidateCacheUsage()
+
+	return &CleanCategoryResult{
+		Key:        key,
+		Label:      meta.Label,
+		FreedBytes: size,
+		FreedCount: count,
+	}, nil
+}
+
+// CleanAllCleanableCache 一键清空所有 cleanable=true 的分类
+//
+// 遍历 cacheCategoryMeta 中所有 Cleanable=true 的 key，逐个调用 CleanCacheCategory；
+// 单个分类失败不影响其它分类继续清理，失败原因写入对应 Result.SkippedNote。
+func (s *PreprocessService) CleanAllCleanableCache() ([]CleanCategoryResult, int64, int, error) {
+	var results []CleanCategoryResult
+	var totalFreed int64
+	var totalCount int
+
+	// 用固定顺序遍历，便于 UI 展示一致
+	order := []string{"preprocess", "transcode", "abr", "thumbnails", "webdav_download"}
+	seen := map[string]bool{}
+	for _, k := range order {
+		if meta, ok := cacheCategoryMeta[k]; ok && meta.Cleanable {
+			seen[k] = true
+			res, err := s.CleanCacheCategory(k, "all")
+			if err != nil {
+				results = append(results, CleanCategoryResult{
+					Key:         k,
+					Label:       meta.Label,
+					Skipped:     true,
+					SkippedNote: err.Error(),
+				})
+				continue
+			}
+			results = append(results, *res)
+			totalFreed += res.FreedBytes
+			totalCount += res.FreedCount
+		}
+	}
+	// 兜底：补漏 cacheCategoryMeta 里其它 cleanable 但不在 order 中的分类
+	for k, meta := range cacheCategoryMeta {
+		if seen[k] || !meta.Cleanable {
+			continue
+		}
+		res, err := s.CleanCacheCategory(k, "all")
+		if err != nil {
+			results = append(results, CleanCategoryResult{
+				Key: k, Label: meta.Label, Skipped: true, SkippedNote: err.Error(),
+			})
+			continue
+		}
+		results = append(results, *res)
+		totalFreed += res.FreedBytes
+		totalCount += res.FreedCount
+	}
+
+	s.logger.Infof("一键清空缓存完成：释放 %d 字节，%d 个文件，涉及 %d 个分类", totalFreed, totalCount, len(results))
+	return results, totalFreed, totalCount, nil
 }
 
 // ==================== 工作协程 ====================

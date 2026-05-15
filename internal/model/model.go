@@ -335,6 +335,25 @@ func (m *Media) DisplayTitle() string {
 	return m.Title
 }
 
+// DescriptiveTitle 返回带辨识信息的展示标题，主要用于列表展示场景。
+//   - 剧集：与 DisplayTitle 等价（保持 SxxExx 集数信息）
+//   - 电影：Title 之后追加 "(Year)" 与 " · OrigTitle"（仅当字段非空且与 Title 不同时）
+//
+// 与 DisplayTitle 区分开是为了避免影响那些只想看主标题的场景（如播放器顶栏）。
+func (m *Media) DescriptiveTitle() string {
+	base := m.DisplayTitle()
+	if m.MediaType == "episode" {
+		return base
+	}
+	if m.Year > 0 {
+		base = fmt.Sprintf("%s (%d)", base, m.Year)
+	}
+	if m.OrigTitle != "" && m.OrigTitle != m.Title {
+		base = base + " · " + m.OrigTitle
+	}
+	return base
+}
+
 // Person 演职人员
 type Person struct {
 	ID         string `json:"id" gorm:"primaryKey;type:text"`
@@ -811,6 +830,12 @@ func AutoMigrate(db *gorm.DB) error {
 		&SystemLog{},
 		// 文件管理操作日志
 		&FileOperationLog{},
+		// SmartRename 智能扫描重命名子系统
+		&RenamePlan{},
+		&RenamePlanItem{},
+		&RenameJournal{},
+		// 扫描后处理：虚拟归类与命名映射（仅 DB 层，不动磁盘）
+		&MediaClassification{},
 	); err != nil {
 		return err
 	}

@@ -6,6 +6,7 @@ import type { ScanProgressData, ScrapeProgressData, ScanPhaseData } from '@/hook
 import { useToast } from './Toast'
 import CreateLibraryModal from './CreateLibraryModal'
 import EditLibraryModal from './EditLibraryModal'
+import SmartRenameDrawer from './SmartRenameDrawer'
 import {
   FolderPlus,
   RefreshCw,
@@ -23,6 +24,7 @@ import {
   ChevronRight,
   RotateCcw,
   Pencil,
+  Wand2,
 } from 'lucide-react'
 import clsx from 'clsx'
 
@@ -60,6 +62,7 @@ export default function LibraryManager({
   const [activeMenu, setActiveMenu] = useState<string | null>(null)
   const [scanAllLoading, setScanAllLoading] = useState(false)
   const [editingLibrary, setEditingLibrary] = useState<Library | null>(null)
+  const [renamingLibrary, setRenamingLibrary] = useState<Library | null>(null)
 
   // 排序逻辑
   const sortedLibraries = [...libraries].sort((a, b) => {
@@ -443,6 +446,17 @@ export default function LibraryManager({
                               <RotateCcw size={14} />
                               重建索引
                             </button>
+                            <button
+                              onClick={() => {
+                                setActiveMenu(null)
+                                setRenamingLibrary(lib)
+                              }}
+                              className="flex w-full items-center gap-2 px-4 py-2.5 text-sm transition-colors hover:bg-[var(--nav-hover-bg)]"
+                              style={{ color: 'var(--text-secondary)' }}
+                            >
+                              <Wand2 size={14} />
+                              智能重命名
+                            </button>
                           </div>
                         </>
                       )}
@@ -568,6 +582,13 @@ export default function LibraryManager({
           setLibraries((libs) => libs.map((l) => (l.id === updated.id ? updated : l)))
           toast.success('媒体库已更新')
         }}
+      />
+
+      {/* ===== 智能扫描重命名抽屉 ===== */}
+      <SmartRenameDrawer
+        open={!!renamingLibrary}
+        library={renamingLibrary}
+        onClose={() => setRenamingLibrary(null)}
       />
     </section>
   )

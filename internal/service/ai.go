@@ -138,6 +138,16 @@ func (s *AIService) IsEnabled() bool {
 	return s.cfg.Enabled && s.cfg.APIKey != "" && s.cfg.APIBase != ""
 }
 
+// Provider 返回当前生效的 AI 服务商（来自 AI 配置中心，可在管理面板动态切换）
+func (s *AIService) Provider() string {
+	return s.cfg.Provider
+}
+
+// Model 返回当前生效的 AI 模型
+func (s *AIService) Model() string {
+	return s.cfg.Model
+}
+
 // IsSmartSearchEnabled 检查智能搜索是否启用
 func (s *AIService) IsSmartSearchEnabled() bool {
 	return s.IsEnabled() && s.cfg.EnableSmartSearch
@@ -374,6 +384,17 @@ func (s *AIService) GetStatus() map[string]interface{} {
 		"request_interval_ms":     s.cfg.RequestIntervalMs,
 	}
 
+	// 多 provider 配置档案（key 字段脱敏，仅返回 api_key_configured 标识）
+	profilesView := make(map[string]map[string]interface{}, len(s.cfg.Profiles))
+	for id, p := range s.cfg.Profiles {
+		profilesView[id] = map[string]interface{}{
+			"api_base":           p.APIBase,
+			"model":              p.Model,
+			"api_key_configured": p.APIKey != "",
+		}
+	}
+	status["profiles"] = profilesView
+
 	s.countMu.Lock()
 	status["monthly_calls"] = s.monthlyCount
 	status["monthly_budget"] = s.cfg.MonthlyBudget
@@ -395,6 +416,17 @@ func (s *AIService) GetStatus() map[string]interface{} {
 // ==================== 配置更新 ====================
 
 // UpdateConfig 动态更新 AI 配置
+//
+// 支持的 updates 字段：
+//   - 顶层基础字段（enabled / provider / api_base / api_key / model / timeout / 各功能开关 / 高级设置）
+//   - profiles: map[string]{api_base, api_key, model} 多 provider 配置档案
+//
+// 写入规则：
+//  1. 顶层字段更新到 s.cfg
+//  2. profiles 字段会与现有 s.cfg.Profiles 合并（仅覆盖传入的 provider id）
+//  3. 每个 profile 的 api_key 留空时，保留现有 key（避免误清空）
+//  4. 同步顶层激活配置 → s.cfg.Profiles[provider]，确保两者一致
+//  5. 持久化到 config/ai.yaml
 func (s *AIService) UpdateConfig(updates map[string]interface{}) error {
 	for key, val := range updates {
 		switch key {
@@ -451,14 +483,74 @@ func (s *AIService) UpdateConfig(updates map[string]interface{}) error {
 			if v, ok := val.(float64); ok {
 				s.cfg.RequestIntervalMs = int(v)
 			}
+		case "profiles":
+			// 多 provider 配置档案合并
+			s.mergeProfilesUpdate(val)
 		}
 	}
+
+	// 顶层激活配置 → 同步到 profiles[provider]，确保保存后两者一致
+	s.syncActiveProfile()
 
 	// 同步到全局配置
 	s.appCfg.AI = s.cfg
 
-	s.logger.Infof("AI 配置已更新")
+	// 持久化到 config/ai.yaml
+	if err := s.appCfg.SaveAIConfig(); err != nil {
+		s.logger.Warnf("AI 配置已更新但持久化失败: %v", err)
+		// 不阻塞热更新生效，仅警告
+	} else {
+		s.logger.Infof("AI 配置已更新并写入 config/ai.yaml")
+	}
 	return nil
+}
+
+// mergeProfilesUpdate 合并前端传来的 profiles 增量到 s.cfg.Profiles
+// 输入应为 map[string]interface{}，每个值为 map{api_base, api_key, model}
+// api_key 为空字符串时保留现有 key（避免误清空）
+func (s *AIService) mergeProfilesUpdate(val interface{}) {
+	raw, ok := val.(map[string]interface{})
+	if !ok {
+		return
+	}
+	if s.cfg.Profiles == nil {
+		s.cfg.Profiles = make(map[string]config.AIProviderProfile)
+	}
+	for providerID, profileVal := range raw {
+		pm, ok := profileVal.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		existing := s.cfg.Profiles[providerID]
+		next := existing // 拷贝
+		if v, ok := pm["api_base"].(string); ok {
+			next.APIBase = v
+		}
+		if v, ok := pm["model"].(string); ok {
+			next.Model = v
+		}
+		// api_key 留空时保留原值（避免前端只是显示掩码、未输入新值的情况覆盖）
+		if v, ok := pm["api_key"].(string); ok && v != "" {
+			next.APIKey = v
+		}
+		s.cfg.Profiles[providerID] = next
+	}
+}
+
+// syncActiveProfile 把当前激活 provider 的顶层字段同步到 profiles 表
+// 确保「顶层即激活档案」的不变式
+func (s *AIService) syncActiveProfile() {
+	if s.cfg.Provider == "" {
+		return
+	}
+	if s.cfg.Profiles == nil {
+		s.cfg.Profiles = make(map[string]config.AIProviderProfile)
+	}
+	s.cfg.Profiles[s.cfg.Provider] = config.AIProviderProfile{
+		APIBase: s.cfg.APIBase,
+		APIKey:  s.cfg.APIKey,
+		Model:   s.cfg.Model,
+	}
 }
 
 // ==================== 连接测试 ====================

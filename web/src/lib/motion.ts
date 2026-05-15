@@ -26,16 +26,18 @@ export const durations = {
 }
 
 // ==================== 页面过渡变体 ====================
+// ⚠️ 注意：这里不要使用 `filter: blur(...)` 动画。
+// 任何带有非 none filter 的祖先元素会成为 position: fixed 后代的 containing block，
+// 导致页面内的弹窗（fixed inset-0）相对该元素定位而不是 viewport，
+// 表现为弹窗"贴顶 / 偏移 / 不居中"。需要模糊过渡时，请只在不包裹 fixed 弹窗的子区块上使用。
 export const pageVariants: Variants = {
   initial: {
     opacity: 0,
     y: 12,
-    filter: 'blur(4px)',
   },
   enter: {
     opacity: 1,
     y: 0,
-    filter: 'blur(0px)',
     transition: {
       duration: durations.page,
       ease: easeSmooth as unknown as [number, number, number, number],
@@ -44,7 +46,6 @@ export const pageVariants: Variants = {
   exit: {
     opacity: 0,
     y: -8,
-    filter: 'blur(2px)',
     transition: {
       duration: durations.normal,
       ease: easeExit as unknown as [number, number, number, number],
@@ -53,33 +54,31 @@ export const pageVariants: Variants = {
 }
 
 // ==================== 淡入变体 ====================
+// 同 pageVariants：避免使用 filter，防止破坏 fixed 弹窗定位
 export const fadeInVariants: Variants = {
-  hidden: { opacity: 0, filter: 'blur(4px)' },
+  hidden: { opacity: 0 },
   visible: {
     opacity: 1,
-    filter: 'blur(0px)',
     transition: { duration: durations.normal, ease: easeSmooth as unknown as [number, number, number, number] },
   },
 }
 
 // ==================== 上浮入场变体 ====================
 export const slideUpVariants: Variants = {
-  hidden: { opacity: 0, y: 20, filter: 'blur(4px)' },
+  hidden: { opacity: 0, y: 20 },
   visible: {
     opacity: 1,
     y: 0,
-    filter: 'blur(0px)',
     transition: { duration: durations.slow, ease: easeSmooth as unknown as [number, number, number, number] },
   },
 }
 
 // ==================== 缩放入场变体 ====================
 export const scaleInVariants: Variants = {
-  hidden: { opacity: 0, scale: 0.92, filter: 'blur(4px)' },
+  hidden: { opacity: 0, scale: 0.92 },
   visible: {
     opacity: 1,
     scale: 1,
-    filter: 'blur(0px)',
     transition: { duration: durations.normal, ease: easeSmooth as unknown as [number, number, number, number] },
   },
 }

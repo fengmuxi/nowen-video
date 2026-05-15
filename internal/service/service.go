@@ -81,6 +81,10 @@ type Services struct {
 	AdultCache *AdultMetadataCache
 	// 自定义文件夹批量刮削（参考 mdcx：用户自选任意路径进行扫描+刮削）
 	AdultFolderBatch *AdultFolderBatchService
+	// 智能扫描重命名（独立子系统，不复用 FileManager）
+	SmartRename *SmartRenameService
+	// 扫描后处理：虚拟归类与命名映射（仅 DB 层；不动磁盘）
+	ScanPostProcess *ScanPostProcessService
 }
 
 func NewServices(repos *repository.Repositories, cfg *config.Config, logger *zap.SugaredLogger) *Services {
@@ -354,6 +358,22 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, logger *zap
 	svcs.AdultScheduler = adultScheduler
 	svcs.AdultFolderBatch = adultFolderBatch
 
+	// 智能扫描重命名服务（独立于 FileManager）
+	smartRenameCfg := DefaultSmartRenameConfig()
+	svcs.SmartRename = NewSmartRenameService(
+		repos.Rename, repos.Media, repos.Series,
+		aiService, smartRenameCfg, logger,
+	)
+
+	// 扫描后处理服务：仅 DB 层的虚拟归类与命名映射
+	// 与 SmartRename 完全独立，不会触发任何磁盘操作。
+	scanPostCfg := DefaultScanPostProcessConfig()
+	svcs.ScanPostProcess = NewScanPostProcessService(
+		repos.ScanClassification, repos.Media, repos.Library,
+		aiService, scanPostCfg, logger,
+	)
+	svcs.ScanPostProcess.Start()
+
 	// 启动调度器（后台循环，默认未启用，需配置开启）
 	adultScheduler.Start()
 
@@ -418,6 +438,16 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, logger *zap
 				logger.Warnf("扫描后自动提交字幕预处理失败: %v", err)
 			} else if subCount > 0 {
 				logger.Infof("扫描后自动提交 %d 个字幕预处理任务", subCount)
+			}
+		}
+
+		// 扫描后处理：虚拟归类与命名映射（仅写 DB，不动磁盘）
+		// 默认始终启用，开销极低（规则识别 + 仅低置信度时调 AI）
+		if svcs.ScanPostProcess != nil {
+			if n, err := svcs.ScanPostProcess.EnqueueLibrary(libraryID); err != nil {
+				logger.Warnf("扫描后处理入队失败: %v", err)
+			} else if n > 0 {
+				logger.Infof("扫描后处理已入队 %d 条媒体（虚拟归类与命名映射，仅 DB）", n)
 			}
 		}
 		// 注意：电影系列合集匹配已移至 library.go 中刮削完成后执行，确保标题已更新

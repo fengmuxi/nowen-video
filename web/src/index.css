@@ -98,6 +98,29 @@
   --deco-glow-blue: rgba(0, 240, 255, 0.15);
   --deco-glow-purple: rgba(138, 43, 226, 0.15);
 
+  /* === 通用语义高亮（chip / toggle / accent，跨主题适配） === */
+  /* 琥珀色：用于"激活 / 高亮"的 chip 和按钮文字 */
+  --accent-amber: #fbbf24;
+  --accent-amber-text: #fbbf24;
+  --accent-amber-bg: rgba(245, 158, 11, 0.18);
+  --accent-amber-bg-strong: rgba(245, 158, 11, 0.28);
+  --accent-amber-border: rgba(245, 158, 11, 0.40);
+  /* 琥珀色 - 柔和版（用于次级入口按钮，避免页面里出现「过曝」的高饱和色块） */
+  --accent-amber-soft-text: #fbbf24;
+  --accent-amber-soft-bg: rgba(245, 158, 11, 0.10);
+  --accent-amber-soft-border: rgba(245, 158, 11, 0.22);
+  --accent-amber-soft-bg-hover: rgba(245, 158, 11, 0.18);
+  --accent-amber-soft-border-hover: rgba(245, 158, 11, 0.36);
+  /* 翠绿色：用于"勾选 / 启用"的 toggle */
+  --accent-emerald: #10b981;
+  --accent-emerald-text: #6ee7b7;
+  --accent-emerald-bg: rgba(16, 185, 129, 0.10);
+  --accent-emerald-border: rgba(16, 185, 129, 0.30);
+  /* chip 通用 */
+  --chip-bg: var(--neon-blue-6);
+  --chip-border: var(--neon-blue-15);
+  --chip-text: var(--text-secondary);
+
   /* Tailwind surface 色板 */
   --surface-50: #f0f4f8;
   --surface-100: #d9e2ec;
@@ -200,6 +223,29 @@
   --grid-line-color: rgba(8, 145, 178, 0.12);
   --deco-glow-blue: rgba(8, 145, 178, 0.08);
   --deco-glow-purple: rgba(124, 58, 237, 0.06);
+
+  /* === 通用语义高亮（chip / toggle / accent，日间适配） === */
+  /* 琥珀色：日间用更深的橙红做文字，保证白底对比度 */
+  --accent-amber: #b45309;
+  --accent-amber-text: #b45309;
+  --accent-amber-bg: rgba(245, 158, 11, 0.16);
+  --accent-amber-bg-strong: rgba(245, 158, 11, 0.28);
+  --accent-amber-border: rgba(180, 83, 9, 0.45);
+  /* 琥珀色 - 柔和版（次级入口按钮专用：白底上做得很淡，hover 才提色） */
+  --accent-amber-soft-text: #92400e;
+  --accent-amber-soft-bg: rgba(245, 158, 11, 0.07);
+  --accent-amber-soft-border: rgba(180, 83, 9, 0.18);
+  --accent-amber-soft-bg-hover: rgba(245, 158, 11, 0.14);
+  --accent-amber-soft-border-hover: rgba(180, 83, 9, 0.32);
+  /* 翠绿色：日间用更深的绿做文字 */
+  --accent-emerald: #047857;
+  --accent-emerald-text: #047857;
+  --accent-emerald-bg: rgba(16, 185, 129, 0.14);
+  --accent-emerald-border: rgba(4, 120, 87, 0.40);
+  /* chip 通用 */
+  --chip-bg: var(--neon-blue-6);
+  --chip-border: var(--neon-blue-15);
+  --chip-text: var(--text-secondary);
 
   /* Tailwind surface 色板（亮色版 — 数值翻转） */
   --surface-50: #1e293b;
@@ -1054,6 +1100,18 @@ html, body, #root {
   margin: 0;
   padding: 0;
   overflow: hidden;
+}
+
+/* 柔和琥珀按钮：用于次级入口（如「自定义筛选」），避免在白底主题里出现过曝色块 */
+.nv-amber-soft-btn {
+  background: var(--accent-amber-soft-bg);
+  border: 1px solid var(--accent-amber-soft-border);
+  color: var(--accent-amber-soft-text);
+  font-weight: 500;
+}
+.nv-amber-soft-btn:hover {
+  background: var(--accent-amber-soft-bg-hover);
+  border-color: var(--accent-amber-soft-border-hover);
 }
 
 .nv-app-shell {

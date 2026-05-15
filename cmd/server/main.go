@@ -601,6 +601,25 @@ func main() {
 		// 用户观影统计（管理员）
 		admin.GET("/stats/:userId", handlers.Stats.GetUserStatsAdmin)
 
+		// ==================== 智能扫描重命名 ====================
+		// 默认 dry-run；落盘需 confirm=true。完整 plan + journal，可回滚。
+		admin.POST("/smart-rename/scan", handlers.SmartRename.Scan)
+		admin.POST("/smart-rename/execute", handlers.SmartRename.Execute)
+		admin.POST("/smart-rename/rollback/:planId", handlers.SmartRename.Rollback)
+		admin.POST("/smart-rename/cancel/:planId", handlers.SmartRename.Cancel)
+		admin.GET("/smart-rename/plans", handlers.SmartRename.ListPlans)
+		admin.GET("/smart-rename/plans/:planId", handlers.SmartRename.GetPlan)
+		admin.DELETE("/smart-rename/plans/:planId", handlers.SmartRename.DeletePlan)
+		admin.PUT("/smart-rename/items/:itemId", handlers.SmartRename.UpdateItem)
+
+		// ==================== 扫描后处理：虚拟归类与命名映射（仅 DB 层） ====================
+		// 影视库扫描入库后自动执行：AI 智能识别 + 虚拟归类 + Jellyfin/Emby 风格命名映射。
+		// 安全约束：全部接口仅写入 media_classifications 表，绝不修改任何磁盘文件。
+		admin.GET("/scan-classify", handlers.ScanPostProcess.List)
+		admin.GET("/scan-classify/stats", handlers.ScanPostProcess.Stats)
+		admin.GET("/scan-classify/:mediaId", handlers.ScanPostProcess.Get)
+		admin.POST("/scan-classify/reprocess", handlers.ScanPostProcess.Reprocess)
+
 		// ==================== 番号刮削管理 ====================
 		admin.GET("/adult-scraper/config", handlers.AdultScraper.GetConfig)
 		admin.PUT("/adult-scraper/config", handlers.AdultScraper.UpdateConfig)
@@ -806,6 +825,19 @@ func main() {
 		admin.POST("/preprocess/tasks/batch-cancel", handlers.Preprocess.BatchCancelTasks)
 		admin.POST("/preprocess/tasks/batch-retry", handlers.Preprocess.BatchRetryTasks)
 		admin.DELETE("/preprocess/cache/:id", handlers.Preprocess.CleanCache)
+		// 预处理产物磁盘占用统计 & 一键清理孤儿目录
+		admin.GET("/preprocess/storage-usage", handlers.Preprocess.GetStorageUsage)
+		admin.POST("/preprocess/clean-orphan", handlers.Preprocess.CleanOrphanCache)
+		// cache/ 整盘分类占用统计（preprocess + transcode + thumbnails + ...）
+		admin.GET("/cache/usage", handlers.Preprocess.GetCacheUsage)
+		// 分类清理：手动清单个分类 / 一键清所有可清分类
+		admin.POST("/cache/clean", handlers.Preprocess.CleanCacheCategory)
+		admin.POST("/cache/clean-all", handlers.Preprocess.CleanAllCache)
+		// 自定义筛选预处理：先预览，再批量提交
+		admin.POST("/preprocess/filter-preview", handlers.Preprocess.PreviewByFilter)
+		admin.POST("/preprocess/submit-by-filter", handlers.Preprocess.SubmitByFilter)
+		// 候选影视列表（供用户手动勾选预处理）
+		admin.GET("/preprocess/candidates", handlers.Preprocess.ListCandidateMedia)
 
 		// ==================== 字幕预处理管理 ====================
 		admin.POST("/subtitle-preprocess/submit", handlers.SubtitlePreprocess.SubmitMedia)

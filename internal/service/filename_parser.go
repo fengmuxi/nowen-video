@@ -54,8 +54,54 @@ var (
 	// yyh3dTagPattern 匹配常见的私有发布站技术标签组合，如 LD_D9.x264.AAC.480P.YYH3D.xt
 	yyh3dTagPattern = regexp.MustCompile(`(?i)\b(?:YYH3D|xt|LD_D\d|LD_D9|D9|D5|D1)\b`)
 
-	// codecNoisePattern 一次性吃掉常见编码/来源/分辨率噪声标签
-	codecNoisePattern = regexp.MustCompile(`(?i)\b(BluRay|BDRip|HDRip|WEB-?DL|WEBRip|DVDRip|HDTV|HDCam|REMUX|PROPER|REPACK|EXTENDED|UNRATED|DIRECTORS\.?CUT|REMASTERED|x264|x265|h\.?264|h\.?265|HEVC|AVC|AAC|DTS|AC3|FLAC|OPUS|1080p|720p|480p|2160p|4K|UHD|HDR|SDR|3D)\b`)
+	// codecNoisePattern 一次性吃掉常见编码/来源/分辨率/音频/HDR/版本/流媒体源等噪声标签
+	// 覆盖 PT 资源命名习惯（如：DDP5.1 / TrueHD.7.1 / HDR10+ / Atmos / DV / AMZN.WEB-DL / Criterion 等）
+	//
+	// 注意：Go 正则的 alternation 是 leftmost-first 而非 longest-match，
+	// 因此长 token 必须排在短 token 前（如 HDR10\+ / HDR10Plus 必须出现在 HDR10 之前）。
+	codecNoisePattern = regexp.MustCompile(`(?i)\b(` +
+		// 介质 / 来源
+		`UHD\.?BluRay|Blu-Ray|BluRay|BDRemux|BDRip|HDRip|WEB-?DL|WEB-?Rip|WEBRip|DVDRip|DVDScr|DVD5|DVD9|HDTV|PDTV|HDCam|TS|TC|R5|REMUX|` +
+		// 流媒体平台标识
+		`AMZN|NFLX|NF|HMAX|MAX|DSNP|ATVP|iTunes|iT|HULU|PCOK|CR|CRAV|FUNI|STAN|VUDU|GPLAY|RED|MA|UPNATOM|` +
+		// 版本/特别版
+		`PROPER|REPACK|EXTENDED|UNCUT|UNRATED|DIRECTORS\.?CUT|REMASTERED|CRITERION|IMAX|OPEN\.?MATTE|THEATRICAL|FINAL\.?CUT|HYBRID|MULTi|INTERNAL|LIMITED|RERIP|` +
+		// 视频编码
+		`x264|x265|h\.?264|h\.?265|HEVC|AVC|VC-?1|XViD|DivX|VP9|AV1|MPEG-?[24]|` +
+		// 音频编码（长 token 优先）+ 通道
+		`DTS-?HD-?MA|DTSHD-?MA|DTS-?HD-?HRA|DTS-?HD|DTS-?MA|DTS-?ES|DTS-?X|TrueHD\.?Atmos|TrueHD|HDMA|Atmos|` +
+		`AAC2\.0|HE-AAC|AAC|EAC3|E-?AC3|AC3|` +
+		`DDP\d?\.?\d?|DDP|DD\+|DD\d?\.?\d?|` +
+		`FLAC2\.0|FLAC|OPUS|MP3|MP2|LPCM|PCM|2Audio|3Audio|2Audios|Dual\.?Audio|` +
+		// 分辨率 / 帧率
+		`2160[pi]|4320[pi]|1080[pi]|720[pi]|480[pi]|4K|UHD|8K|24fps|25fps|30fps|50fps|60fps|` +
+		// 色彩 / HDR 标记（长 token 优先）
+		`HDR10Plus|HDR10\+|HDR10|HLG|HDR|SDR|DoVi|Dolby\.?Vision|DV|10bit|8bit|12bit|REC\.?709|REC\.?2020|` +
+		// 立体声/3D
+		`3D|HSBS|HOU|TAB|SBS|` +
+		// 帧标记
+		`HQ|LQ|RAW` +
+		`)\b\+?`)
+
+	// audioChannelPattern 单独吃掉残留的音频通道数（5.1 / 7.1 / 2.0 / 2.1）
+	// 限定为前后均为分隔符或边界，避免误伤剧集 S05E01 / 7.1 之类（剧集是 SxxExx 格式不会单独出现 5.1）
+	audioChannelPattern = regexp.MustCompile(`(?:^|[\s\.\-_])([257]\.[01])(?:[\s\.\-_]|$)`)
+
+	// ptSiteTagPattern PT 主站标签：@CHDBits / @MTeam / @HDHome / @HDFans / @OurBits 等
+	// 文件名里 @ 几乎只用于 PT 主站标记，长度 2~20 的字母数字串一律视为站点标签
+	ptSiteTagPattern = regexp.MustCompile(`(?i)\s*@[A-Za-z][A-Za-z0-9_\-]{1,20}\b`)
+
+	// ptReleaseGroupSuffixPattern 已知 PT/影视资源制作组后缀 -XXX，仅匹配末尾位置
+	// 维护高频词表，避免误伤英文片名（例如不能把 The.Matrix 的 Matrix 当成制作组）
+	// 词表覆盖中文区 PT 站常见组 + 海外高频组。位置必须紧贴字符串末尾
+	ptReleaseGroupSuffixPattern = regexp.MustCompile(`(?i)[\s\-_\.]+-?(` +
+		// 中文 PT 站常见组
+		`FRDS|CHD|CHDBits|CHDPAD|CHDTV|CHDWEB|WiKi|HDC|HDChina|HDS|HDSky|HDH|HDHome|HDArea|HDWinG|HDFans|MTeam|MTeamPT|MTeamTV|NTb|TLF|MySiLU|OurBits|OurTV|CMCT|CMCTV|MNHD|BeyondHD|KRaLiMaRKo|FraMeSToR|EPSiLON|FoRM|AREY|HHWEB|PTHome|AGSVPT|ZmWeb|NSBC|Pter|PuTao|TTG|TGx|ADWeb|NowYS|HQC|HDU|PTer|Audies|Bambumi|HDSWEB|SiNNERS|playWEB|playHD|playSD|playWeb|GalaxyRG|GalaxyTV|` +
+		// 海外高频组
+		`RARBG|YTS|YIFY|PSA|EVO|DON|CtrlHD|GECKOS|SPARKS|AMIABLE|MAJESTiC|KamiKaze|KOGi|NTG|decibeL|BMF|HONE|FLUX|NOSiViD|monkee|GLHF|TRiToN|PHOENiX|CMRG|TEPES|RUSTED|playWEB|TURG|ION10|ION265|ION10|ETHEL|TOMMY|SMURF|THUGLiNE` +
+		`)$`)
+
+
 
 	// spaceSquashPattern 多空格合一
 	spaceSquashPattern = regexp.MustCompile(`\s+`)
@@ -152,6 +198,24 @@ func ParseMovieFilename(filename string) ParsedFilename {
 
 	// 11) 编码/来源/分辨率噪声
 	name = codecNoisePattern.ReplaceAllString(name, " ")
+
+	// 11.1) 剥离 PT 主站标签 @CHDBits / @MTeam …
+	name = ptSiteTagPattern.ReplaceAllString(name, " ")
+
+	// 11.2) 剥离残留的音频通道（5.1/7.1/2.0 等）
+	name = audioChannelPattern.ReplaceAllString(name, " ")
+
+	// 11.3) 剥离已知 PT/影视资源制作组后缀 -FRDS / -WiKi …
+	//      注意：仅吃尾部位置，且只匹配白名单组名，避免误伤英文标题
+	//      可能存在 -MNHD-FRDS 这种叠加，循环最多三次
+	for i := 0; i < 3; i++ {
+		next := ptReleaseGroupSuffixPattern.ReplaceAllString(strings.TrimRight(name, " ."), "")
+		if next == strings.TrimRight(name, " .") {
+			break
+		}
+		name = next
+	}
+
 
 	// 12) 如果之前没拿到年份，再尝试常规括号年份 / 普通年份
 	if out.Year == 0 {

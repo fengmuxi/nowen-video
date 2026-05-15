@@ -4,6 +4,9 @@ export default {
     "./index.html",
     "./src/**/*.{js,ts,jsx,tsx}",
   ],
+  // 项目使用 <html data-theme="dark|light"> 切换主题，
+  // 通过 selector 模式让 Tailwind 的 dark: 变体与此对齐。
+  darkMode: ['selector', '[data-theme="dark"]'],
   theme: {
     extend: {
       fontFamily: {
