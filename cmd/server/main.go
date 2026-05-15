@@ -591,6 +591,7 @@ func main() {
 		// AI 管理
 		admin.GET("/ai/status", handlers.AI.GetAIStatus)
 		admin.PUT("/ai/config", handlers.AI.UpdateAIConfig)
+		admin.POST("/ai/auto-pilot", handlers.AI.EnableAutoPilot)
 		admin.POST("/ai/test", handlers.AI.TestAIConnection)
 		admin.DELETE("/ai/cache", handlers.AI.ClearAICache)
 		admin.GET("/ai/cache", handlers.AI.GetAICacheStats)

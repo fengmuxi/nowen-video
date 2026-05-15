@@ -20,6 +20,8 @@ export const aiApi = {
   // 更新 AI 配置（管理员）
   updateConfig: (updates: Partial<{
     enabled: boolean
+    auto_pilot: boolean
+    block_local_ai: boolean
     provider: string
     api_base: string
     api_key: string
@@ -36,6 +38,11 @@ export const aiApi = {
     profiles: Record<string, { api_base?: string; api_key?: string; model?: string }>
   }>) =>
     api.put<{ message: string; data: AIStatus }>('/admin/ai/config', updates),
+
+  // 一键启用全自动托管模式（管理员）
+  // 提供 provider / api_key 即可，会自动填好 api_base / model，并打开所有 AI 子开关
+  enableAutoPilot: (params?: { provider?: string; api_key?: string }) =>
+    api.post<{ message: string; data: AIStatus }>('/admin/ai/auto-pilot', params || {}),
 
   // 测试 AI 连接（管理员）
   testConnection: () =>

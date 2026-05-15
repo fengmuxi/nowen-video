@@ -368,6 +368,12 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, logger *zap
 	// 扫描后处理服务：仅 DB 层的虚拟归类与命名映射
 	// 与 SmartRename 完全独立，不会触发任何磁盘操作。
 	scanPostCfg := DefaultScanPostProcessConfig()
+	// 🚀 AutoPilot：启用「全自动托管」后，强制每条都走 AI（不依赖阈值）。
+	if cfg.AI.AutoPilot {
+		scanPostCfg.ForceAIIdentify = true
+		scanPostCfg.EnableAIFallback = true
+		scanPostCfg.AIConfidenceThreshold = 1.0
+	}
 	svcs.ScanPostProcess = NewScanPostProcessService(
 		repos.ScanClassification, repos.Media, repos.Library,
 		aiService, scanPostCfg, logger,

@@ -28,6 +28,7 @@ import {
   ChevronUp,
   Wifi,
   WifiOff,
+  Rocket,
 } from 'lucide-react'
 import clsx from 'clsx'
 
@@ -131,6 +132,9 @@ export default function AITab() {
   const [errorLogs, setErrorLogs] = useState<AIErrorLog[]>([])
   const [showErrors, setShowErrors] = useState(false)
 
+  // AutoPilot 切换繁忙态
+  const [autoPilotBusy, setAutoPilotBusy] = useState(false)
+
   // 功能测试
   const [testingSearch, setTestingSearch] = useState(false)
   const [searchTestQuery, setSearchTestQuery] = useState('')
@@ -197,6 +201,30 @@ export default function AITab() {
     }
     load()
   }, [fetchStatus, fetchCacheStats, fetchErrorLogs])
+
+  // ==================== AutoPilot 切换 ====================
+  const handleToggleAutoPilot = async (enable: boolean) => {
+    if (autoPilotBusy) return
+    setAutoPilotBusy(true)
+    try {
+      if (enable) {
+        // 开启时：把当前编辑面板里的 provider+key 一起带上，方便首次开通
+        const params: { provider?: string; api_key?: string } = {}
+        if (editProvider) params.provider = editProvider
+        if (editApiKey) params.api_key = editApiKey
+        await aiApi.enableAutoPilot(params)
+        toast.success('AI 全自动托管模式已开启')
+      } else {
+        await aiApi.updateConfig({ auto_pilot: false })
+        toast.success('AI 全自动托管模式已关闭')
+      }
+      await fetchStatus()
+    } catch {
+      toast.error(enable ? '开启托管模式失败' : '关闭托管模式失败')
+    } finally {
+      setAutoPilotBusy(false)
+    }
+  }
 
   // ==================== 配置保存 ====================
   const handleSaveConfig = async () => {
@@ -449,6 +477,66 @@ export default function AITab() {
           </p>
         </div>
       </div>
+
+      {/* ==================== 🚀 全自动托管模式（AutoPilot）==================== */}
+      <section>
+        <div
+          className="glass-panel rounded-xl p-5 border"
+          style={{
+            background: status?.auto_pilot
+              ? 'linear-gradient(135deg, var(--neon-blue-10), transparent 60%)'
+              : undefined,
+            borderColor: status?.auto_pilot ? 'var(--neon-blue-30, rgba(56,189,248,0.3))' : 'transparent',
+          }}
+        >
+          <div className="flex items-start justify-between gap-4">
+            <div className="flex items-start gap-3 min-w-0">
+              <div
+                className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl"
+                style={{ background: 'var(--neon-blue-10)' }}
+              >
+                <Rocket size={22} className="text-neon" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-base font-semibold text-theme-primary flex items-center gap-2">
+                  全自动托管模式
+                  {status?.auto_pilot && (
+                    <span className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded bg-neon/10 text-neon">
+                      Active
+                    </span>
+                  )}
+                </p>
+                <p className="mt-1 text-xs text-theme-muted leading-relaxed">
+                  开启后新增媒体库会自动执行：<span className="text-theme-secondary">AI 识别 → 归类 → 命名 → TMDb·豆瓣 元数据刮削 → AI 兜底</span>。
+                  <br />仅写入数据库，<span className="text-green-400">不会修改磁盘上任何原始文件</span>。开启后强制使用云端 LLM 服务商（拒绝 ollama 等本地 AI）。
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => handleToggleAutoPilot(!status?.auto_pilot)}
+              disabled={autoPilotBusy}
+              className="toggle-switch toggle-switch-lg"
+              role="switch"
+              aria-checked={!!status?.auto_pilot}
+              aria-label="全自动托管模式"
+            >
+              <span className="toggle-switch-thumb" />
+            </button>
+          </div>
+          {!status?.api_configured && (
+            <div className="mt-3 flex items-center gap-2 text-xs text-yellow-400">
+              <AlertTriangle size={14} />
+              请先在下方填写并保存 API Key，托管模式才能生效
+            </div>
+          )}
+          {status?.auto_pilot && status?.api_configured && (
+            <div className="mt-3 flex items-center gap-2 text-xs text-green-400">
+              <Check size={14} />
+              托管模式已生效：后续扫描入库的文件将自动调用 {status.provider} / {status.model}
+            </div>
+          )}
+        </div>
+      </section>
 
       {/* ==================== 配置管理 ==================== */}
       <section>

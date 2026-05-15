@@ -132,6 +132,14 @@ type AIProviderProfile struct {
 type AIConfig struct {
 	// 是否启用 AI 功能（总开关）
 	Enabled bool `mapstructure:"enabled"`
+	// 🚀 全自动托管模式（AutoPilot）：开启后由系统自动串联
+	// 「扫描入库 → AI 识别 → 归类 → 命名 → 元数据刮削 → AI 兜底」全流程，
+	// 无需用户干预；同时强制启用所有 AI 子功能并提升识别阈值（强制每条都过 AI）。
+	// 仅写入数据库，不动磁盘任何原始文件。
+	AutoPilot bool `mapstructure:"auto_pilot"`
+	// 是否禁止使用本地 AI（如 ollama），强制走云端 LLM 服务商
+	// 默认 true：满足「禁用本地 AI 处理，全部调用服务商提供的 AI API」的产品要求
+	BlockLocalAI bool `mapstructure:"block_local_ai"`
 	// LLM 提供商: openai / deepseek / qwen / ollama
 	Provider string `mapstructure:"provider"`
 	// API 基础地址（当前激活 provider 的 api_base，与 profiles[provider].api_base 保持一致）
@@ -653,10 +661,14 @@ func setDefaults() {
 
 	// ---- AI ----
 	viper.SetDefault("ai.enabled", false)
-	viper.SetDefault("ai.provider", "openai")
-	viper.SetDefault("ai.api_base", "https://api.openai.com/v1")
+	// AutoPilot 默认关闭：保留老用户行为不变；新用户在 UI 一键开启即可
+	viper.SetDefault("ai.auto_pilot", false)
+	// 默认禁止本地 AI（ollama）：强制使用云端 LLM 服务商
+	viper.SetDefault("ai.block_local_ai", true)
+	viper.SetDefault("ai.provider", "deepseek")
+	viper.SetDefault("ai.api_base", "https://api.deepseek.com/v1")
 	viper.SetDefault("ai.api_key", "")
-	viper.SetDefault("ai.model", "gpt-4o-mini")
+	viper.SetDefault("ai.model", "deepseek-chat")
 	viper.SetDefault("ai.timeout", 30)
 	viper.SetDefault("ai.enable_smart_search", true)
 	viper.SetDefault("ai.enable_recommend_reason", true)
@@ -1093,6 +1105,8 @@ func (c *Config) SaveAIConfig() error {
 
 	// 1. 同步到全局 viper（ai.* 命名空间）
 	viper.Set("ai.enabled", ac.Enabled)
+	viper.Set("ai.auto_pilot", ac.AutoPilot)
+	viper.Set("ai.block_local_ai", ac.BlockLocalAI)
 	viper.Set("ai.provider", ac.Provider)
 	viper.Set("ai.api_base", ac.APIBase)
 	viper.Set("ai.api_key", ac.APIKey)
@@ -1152,6 +1166,8 @@ func (c *Config) writeAIYaml() error {
 
 	// 写入主字段
 	subViper.Set("enabled", ac.Enabled)
+	subViper.Set("auto_pilot", ac.AutoPilot)
+	subViper.Set("block_local_ai", ac.BlockLocalAI)
 	subViper.Set("provider", ac.Provider)
 	subViper.Set("api_base", ac.APIBase)
 	subViper.Set("api_key", ac.APIKey)

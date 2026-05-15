@@ -780,6 +780,10 @@ export interface AIProviderProfileView {
 
 export interface AIStatus {
   enabled: boolean
+  // 全自动托管模式（AutoPilot）：开启后由系统自动串联识别/归类/命名/刮削
+  auto_pilot?: boolean
+  // 是否禁用本地 AI（如 ollama）；开启后强制使用云端服务商
+  block_local_ai?: boolean
   provider: string
   model: string
   api_base: string

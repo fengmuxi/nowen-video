@@ -134,8 +134,17 @@ func NewAIService(cfg config.AIConfig, appCfg *config.Config, mediaRepo *reposit
 }
 
 // IsEnabled 检查 AI 服务是否启用
+//
+// AutoPilot 语义：只要配了 APIKey 与 APIBase，即使 Enabled=false 也会被视为启用，
+// 从而避免「用户填了 key 却忘记打 enabled 开关」造成的 AI 不生效。
 func (s *AIService) IsEnabled() bool {
-	return s.cfg.Enabled && s.cfg.APIKey != "" && s.cfg.APIBase != ""
+	if s.cfg.APIKey == "" || s.cfg.APIBase == "" {
+		return false
+	}
+	if s.cfg.AutoPilot {
+		return true
+	}
+	return s.cfg.Enabled
 }
 
 // Provider 返回当前生效的 AI 服务商（来自 AI 配置中心，可在管理面板动态切换）
@@ -150,17 +159,22 @@ func (s *AIService) Model() string {
 
 // IsSmartSearchEnabled 检查智能搜索是否启用
 func (s *AIService) IsSmartSearchEnabled() bool {
-	return s.IsEnabled() && s.cfg.EnableSmartSearch
+	return s.IsEnabled() && (s.cfg.AutoPilot || s.cfg.EnableSmartSearch)
 }
 
 // IsRecommendReasonEnabled 检查推荐理由生成是否启用
 func (s *AIService) IsRecommendReasonEnabled() bool {
-	return s.IsEnabled() && s.cfg.EnableRecommendReason
+	return s.IsEnabled() && (s.cfg.AutoPilot || s.cfg.EnableRecommendReason)
 }
 
 // IsMetadataEnhanceEnabled 检查元数据增强是否启用
 func (s *AIService) IsMetadataEnhanceEnabled() bool {
-	return s.IsEnabled() && s.cfg.EnableMetadataEnhance
+	return s.IsEnabled() && (s.cfg.AutoPilot || s.cfg.EnableMetadataEnhance)
+}
+
+// IsAutoPilotEnabled 是否处于全自动托管模式
+func (s *AIService) IsAutoPilotEnabled() bool {
+	return s.IsEnabled() && s.cfg.AutoPilot
 }
 
 // ==================== LLM 调用核心 ====================
@@ -169,6 +183,11 @@ func (s *AIService) IsMetadataEnhanceEnabled() bool {
 func (s *AIService) ChatCompletion(systemPrompt, userPrompt string, temperature float64, maxTokens int) (string, error) {
 	if !s.IsEnabled() {
 		return "", fmt.Errorf("AI 服务未启用")
+	}
+
+	// 云端强制：拦截本地 AI（如 ollama），避免「全自动托管」语义下走本地推理
+	if s.cfg.BlockLocalAI && isLocalAIProvider(s.cfg.Provider, s.cfg.APIBase) {
+		return "", fmt.Errorf("当前系统禁止本地 AI（provider=%s），请在 AI 配置中选择云端服务商（OpenAI/DeepSeek/通义千问）", s.cfg.Provider)
 	}
 
 	// 预算检查
@@ -367,10 +386,40 @@ func maskAPIBase(base string) string {
 	return base[:20] + "..."
 }
 
+// isLocalAIProvider 判断是否为本地 AI 推理实例（provider 名或 api_base 是本地地址）
+// AutoPilot/BlockLocalAI 语义下会拒绝调用，确保「全部调用服务商提供的 AI API」。
+func isLocalAIProvider(provider, apiBase string) bool {
+	p := strings.ToLower(strings.TrimSpace(provider))
+	if p == "ollama" || p == "local" || p == "localai" || p == "llamacpp" || p == "llama-cpp" {
+		return true
+	}
+	b := strings.ToLower(strings.TrimSpace(apiBase))
+	if b == "" {
+		return false
+	}
+	// 常见本地地址特征
+	localHints := []string{
+		"localhost", "127.0.0.1", "0.0.0.0",
+		"://192.168.", "://10.", "://172.16.", "://172.17.", "://172.18.", "://172.19.",
+		"://172.20.", "://172.21.", "://172.22.", "://172.23.", "://172.24.",
+		"://172.25.", "://172.26.", "://172.27.", "://172.28.", "://172.29.",
+		"://172.30.", "://172.31.",
+		":11434", // Ollama 默认端口
+	}
+	for _, h := range localHints {
+		if strings.Contains(b, h) {
+			return true
+		}
+	}
+	return false
+}
+
 // GetStatus 获取 AI 服务状态（用于前端展示）
 func (s *AIService) GetStatus() map[string]interface{} {
 	status := map[string]interface{}{
 		"enabled":                 s.cfg.Enabled,
+		"auto_pilot":              s.cfg.AutoPilot,
+		"block_local_ai":          s.cfg.BlockLocalAI,
 		"provider":                s.cfg.Provider,
 		"model":                   s.cfg.Model,
 		"api_base":                s.cfg.APIBase,
@@ -433,6 +482,21 @@ func (s *AIService) UpdateConfig(updates map[string]interface{}) error {
 		case "enabled":
 			if v, ok := val.(bool); ok {
 				s.cfg.Enabled = v
+			}
+		case "auto_pilot":
+			if v, ok := val.(bool); ok {
+				s.cfg.AutoPilot = v
+				// 开启 AutoPilot 时隐式点亮主开关与子功能开关，避免老配置遗留中的 false 干扰「一键设为」体验
+				if v {
+					s.cfg.Enabled = true
+					s.cfg.EnableSmartSearch = true
+					s.cfg.EnableRecommendReason = true
+					s.cfg.EnableMetadataEnhance = true
+				}
+			}
+		case "block_local_ai":
+			if v, ok := val.(bool); ok {
+				s.cfg.BlockLocalAI = v
 			}
 		case "provider":
 			if v, ok := val.(string); ok {

@@ -44,8 +44,9 @@ const (
 // ScanPostProcessConfig 服务级配置
 type ScanPostProcessConfig struct {
 	NamingStyle           string  // jellyfin / plex
-	AIConfidenceThreshold float64 // 触发 AI Fallback 阈值（默认 0.7）
+	AIConfidenceThreshold float64 // 触发 AI Fallback 阈值（默认 0.7；全自动托管下使用 1.0 强制走 AI）
 	EnableAIFallback      bool    // 是否启用 AI Fallback
+	ForceAIIdentify       bool    // 🚀 全自动托管：强制每条都调 AI（不看规则置信度）
 	Workers               int     // 队列消费协程数
 	QueueSize             int     // 队列容量
 }
@@ -57,7 +58,7 @@ func DefaultScanPostProcessConfig() ScanPostProcessConfig {
 		AIConfidenceThreshold: 0.7,
 		EnableAIFallback:      true,
 		Workers:               scanPostProcessDefaultWorkers,
-		QueueSize:              scanPostProcessDefaultQueueSize,
+		QueueSize:             scanPostProcessDefaultQueueSize,
 	}
 }
 
@@ -320,19 +321,25 @@ func (s *ScanPostProcessService) identify(media *model.Media, c *model.MediaClas
 	confidence := scoreClassificationConfidence(parsed, media)
 	c.Confidence = confidence
 
-	// AI Fallback：置信度低且 AI 启用
-	if s.cfg.EnableAIFallback &&
-		confidence < s.cfg.AIConfidenceThreshold &&
+	// AI Fallback：
+	//   - 默认模式：规则置信度 < AIConfidenceThreshold 才走 AI
+	//   - 全自动托管 (AutoPilot)：强制每条都调 AI，不依赖阈值
+	forceAI := s.cfg.ForceAIIdentify || (s.ai != nil && s.ai.IsAutoPilotEnabled())
+	shouldRunAI := s.cfg.EnableAIFallback &&
+		(forceAI || confidence < s.cfg.AIConfidenceThreshold) &&
 		s.ai != nil && s.ai.IsEnabled() &&
-		srcName != "" {
+		srcName != ""
+
+	if shouldRunAI {
 		if aiOut, raw, err := s.callAIIdentify(srcName, parsed); err == nil && aiOut != nil {
 			c.AIInvoked = true
 			c.AIRawResponse = raw
 			// 记录使用的 AI 服务商与模型（来自 AI 配置中心当前生效项）
 			c.AIProvider = s.ai.Provider()
 			c.AIModel = s.ai.Model()
-			// 优先采纳 AI 结果（仅当 AI 自评高于规则置信度）
-			if aiOut.Confidence > confidence {
+			// AutoPilot 下以 AI 为准，默认模式仅在 AI 自评高于规则时采纳
+			accept := forceAI || aiOut.Confidence > confidence
+			if accept {
 				if aiOut.Title != "" {
 					parsed.Title = aiOut.Title
 				}
@@ -357,7 +364,9 @@ func (s *ScanPostProcessService) identify(media *model.Media, c *model.MediaClas
 				if aiOut.Episode > 0 {
 					parsed.Episode = aiOut.Episode
 				}
-				c.Confidence = aiOut.Confidence
+				if aiOut.Confidence > 0 {
+					c.Confidence = aiOut.Confidence
+				}
 			}
 		} else if err != nil {
 			// AI 失败 → 不影响整体流程，仅降级为 partial

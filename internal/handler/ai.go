@@ -111,6 +111,72 @@ func (h *AIHandler) TestSmartSearch(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": result})
 }
 
+// EnableAutoPilot 一键启用 AI 全自动托管模式（管理员）
+//
+// 接受可选的 provider 预设与 api_key，会在一次调用中：
+//  1. 强制开启 ai.enabled / ai.auto_pilot
+//  2. 强制启用三个子功能开关（智能搜索、推荐理由、元数据增强）
+//  3. 拒绝本地 AI（block_local_ai=true）
+//  4. 按预设 provider 自动填好 api_base / model（用户只需提供 api_key）
+//
+// 请求体示例：
+//
+//	{ "provider": "deepseek", "api_key": "sk-xxxxxx" }
+func (h *AIHandler) EnableAutoPilot(c *gin.Context) {
+	var req struct {
+		Provider string `json:"provider"`
+		APIKey   string `json:"api_key"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		// 允许空 body：表示在已有 provider/api_key 基础上仅打开 AutoPilot 开关
+		req = struct {
+			Provider string `json:"provider"`
+			APIKey   string `json:"api_key"`
+		}{}
+	}
+
+	// provider 预设映射（按 OpenAI 兼容 API）
+	presets := map[string]struct {
+		APIBase string
+		Model   string
+	}{
+		"openai":   {APIBase: "https://api.openai.com/v1", Model: "gpt-4o-mini"},
+		"deepseek": {APIBase: "https://api.deepseek.com/v1", Model: "deepseek-chat"},
+		"qwen":     {APIBase: "https://dashscope.aliyuncs.com/compatible-mode/v1", Model: "qwen-plus"},
+	}
+
+	updates := map[string]interface{}{
+		"enabled":                 true,
+		"auto_pilot":              true,
+		"block_local_ai":          true,
+		"enable_smart_search":     true,
+		"enable_recommend_reason": true,
+		"enable_metadata_enhance": true,
+	}
+
+	if req.Provider != "" {
+		updates["provider"] = req.Provider
+		if p, ok := presets[req.Provider]; ok {
+			updates["api_base"] = p.APIBase
+			updates["model"] = p.Model
+		}
+	}
+	if req.APIKey != "" {
+		updates["api_key"] = req.APIKey
+	}
+
+	if err := h.aiService.UpdateConfig(updates); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	status := h.aiService.GetStatus()
+	c.JSON(http.StatusOK, gin.H{
+		"message": "AI 全自动托管模式已开启",
+		"data":    status,
+	})
+}
+
 // TestRecommendReason 测试推荐理由生成（管理员）
 func (h *AIHandler) TestRecommendReason(c *gin.Context) {
 	var req struct {
