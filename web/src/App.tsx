@@ -154,8 +154,11 @@ export default function App() {
               <Route path="collections" element={<CollectionsPage />} />
               <Route path="collections/:id" element={<CollectionDetailPage />} />
               <Route path="person/:id" element={<PersonDetailPage />} />
-              {/* 智能重命名入口已收敛到媒体库 → 扫描归类专家模式（方案 B：UI 收敛） */}
-              <Route path="smart-rename" element={<Navigate to="/admin" replace />} />
+              {/*
+                方案 B Phase 3：智能重命名独立页已下线
+                - 入口收敛至「媒体库 → 扫描归类 → 专家模式 → 应用到磁盘」
+                - 旧路径 /smart-rename 由通配 "*" 兜底回首页
+              */}
             </Route>
 
             {/* 未匹配路由 */}
