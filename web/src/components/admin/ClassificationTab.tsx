@@ -108,8 +108,14 @@ export default function ClassificationTab() {
   })
 
   // 列表 / 分页
+  // 每页条数：支持 20 / 30 / 50 / 100 / 200，并通过 localStorage 持久化用户偏好
+  const PAGE_SIZE_OPTIONS = [20, 30, 50, 100, 200] as const
   const [page, setPage] = useState(1)
-  const [size] = useState(30)
+  const [size, setSize] = useState<number>(() => {
+    const raw = localStorage.getItem('classify-page-size')
+    const n = raw ? parseInt(raw, 10) : 30
+    return PAGE_SIZE_OPTIONS.includes(n as (typeof PAGE_SIZE_OPTIONS)[number]) ? n : 30
+  })
   const [items, setItems] = useState<MediaClassification[]>([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(false)
@@ -284,6 +290,11 @@ export default function ClassificationTab() {
   useEffect(() => {
     localStorage.setItem('classify-expert-mode', expertMode ? 'true' : 'false')
   }, [expertMode])
+
+  // 持久化每页条数
+  useEffect(() => {
+    localStorage.setItem('classify-page-size', String(size))
+  }, [size])
 
   // 快捷键
   useEffect(() => {
@@ -791,12 +802,49 @@ export default function ClassificationTab() {
           </div>
         )}
 
-        {totalPages > 1 && (
-          <div className="flex items-center justify-between border-t border-surface-700/60 px-4 py-2 text-xs">
-            <span className="text-surface-500">
-              第 {page} / {totalPages} 页
+        {/* 分页条：始终显示，便于随时调整每页条数 */}
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-surface-700/60 px-4 py-2 text-xs">
+          <div className="flex items-center gap-3 text-surface-500">
+            <span>
+              第 <span className="text-surface-200">{page}</span> / {totalPages} 页
             </span>
-            <div className="flex gap-2">
+            <span className="text-surface-600">·</span>
+            <span>
+              共 <span className="text-surface-200">{total}</span> 条
+            </span>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="flex items-center gap-1.5 text-surface-500">
+              <span>每页</span>
+              <select
+                value={size}
+                onChange={(e) => {
+                  const v = parseInt(e.target.value, 10)
+                  if (!Number.isNaN(v)) {
+                    setSize(v)
+                    setPage(1)
+                  }
+                }}
+                className="rounded border border-surface-700 bg-surface-900 px-2 py-1 text-surface-200 focus:border-neon-blue focus:outline-none"
+                title="每页显示条数"
+              >
+                {PAGE_SIZE_OPTIONS.map((n) => (
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
+                ))}
+              </select>
+              <span>条</span>
+            </label>
+            <div className="flex gap-1">
+              <button
+                disabled={page <= 1}
+                onClick={() => setPage(1)}
+                className="rounded border border-surface-700 px-2 py-1 disabled:opacity-40"
+                title="首页"
+              >
+                «
+              </button>
               <button
                 disabled={page <= 1}
                 onClick={() => setPage((p) => Math.max(1, p - 1))}
@@ -811,9 +859,17 @@ export default function ClassificationTab() {
               >
                 下一页
               </button>
+              <button
+                disabled={page >= totalPages}
+                onClick={() => setPage(totalPages)}
+                className="rounded border border-surface-700 px-2 py-1 disabled:opacity-40"
+                title="末页"
+              >
+                »
+              </button>
             </div>
           </div>
-        )}
+        </div>
       </div>
 
       {/* 修正弹层 */}
