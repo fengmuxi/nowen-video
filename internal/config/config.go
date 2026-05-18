@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	secretcrypto "github.com/nowen-video/nowen-video/internal/crypto"
 	"github.com/spf13/viper"
 )
 
@@ -122,10 +123,60 @@ type CacheConfig struct {
 
 // AIProviderProfile 单个 LLM 提供商的配置档案
 // 用于在不同 provider 之间切换时分别记忆 api_base / api_key / model
+//
+// API Key 在持久化（写 yaml）时会经 internal/crypto.Encrypt 包装为 "ENC:..."。
+// Load 时按需解密；旧明文在解密阶段直接透传，保证向后兼容。
 type AIProviderProfile struct {
 	APIBase string `mapstructure:"api_base" yaml:"api_base"`
 	APIKey  string `mapstructure:"api_key" yaml:"api_key"`
 	Model   string `mapstructure:"model" yaml:"model"`
+	// Enabled 是否参与 AIRouter 智能切换链路；为 false 时即使在链路中也会被跳过。
+	// 默认 true（允许使用），仅当用户在 UI 上显式禁用时为 false。
+	Enabled bool `mapstructure:"enabled" yaml:"enabled,omitempty"`
+
+	// ModelChain 模型级故障转移链（V8）。
+	//
+	// 当本 provider 调用某个模型遭遇"模型粒度的配额耗尽"（如阿里云百炼
+	// AllocationQuota.FreeTierOnly / Free allocated quota exceeded / HTTP 403 quota）
+	// 时，AIRouter 会按此链顺序在**同一 provider 内**切换到下一个模型继续服务，
+	// 直到链尾全部用尽再退化到 provider 级 Failover.Chain。
+	//
+	// 数组语义：
+	//   - 第 0 位通常等于 Model（不是必须，AIRouter 会自动把当前 Model 视为起点）
+	//   - 列表中重复 / 空字符串会被忽略
+	//   - 留空表示禁用模型级故障转移（仅 provider 级生效）
+	ModelChain []string `mapstructure:"model_chain" yaml:"model_chain,omitempty"`
+
+	// CurrentModel 当前实际生效的模型 ID（由 AIRouter 维护并落盘）。
+	// 与 Model 的关系：
+	//   - Model        = 用户偏好的"主模型"
+	//   - CurrentModel = 此刻真正在用的模型（可能因模型级 failover 切换）
+	// 留空时视为 == Model。
+	CurrentModel string `mapstructure:"current_model" yaml:"current_model,omitempty"`
+}
+
+// AIFailoverConfig AI 智能切换 / 故障转移策略
+//
+// 当主 provider（cfg.AI.Provider）出现配额耗尽 / 持续 429 / 连续 5xx 时，
+// AIRouter 会按照 Chain 顺序自动切换到下一个 enabled=true 的备用 provider；
+// 主 provider 在 AutoRecoverAfterMin 分钟后会被尝试恢复（轻量探测 + 切回）。
+type AIFailoverConfig struct {
+	// Enabled 是否启用故障转移；关闭后任何错误都直接抛给调用方
+	Enabled bool `mapstructure:"enabled" yaml:"enabled"`
+	// Chain 切换链：按数组顺序尝试。例如 ["qwen", "deepseek", "zhipu"]
+	// 链中 provider 必须在 cfg.AI.Profiles 中有对应档案，否则跳过。
+	Chain []string `mapstructure:"chain" yaml:"chain,omitempty"`
+	// AutoRecoverAfterMin 自动恢复主 provider 的窗口（分钟）。0 表示不自动恢复（需手动 Restore）
+	AutoRecoverAfterMin int `mapstructure:"auto_recover_after_min" yaml:"auto_recover_after_min"`
+	// ConsecutiveErrorThreshold 主 provider 连续错误多少次后判定不可用（默认 3）
+	ConsecutiveErrorThreshold int `mapstructure:"consecutive_error_threshold" yaml:"consecutive_error_threshold"`
+	// CurrentActive 当前实际生效的 provider id（运行时由 AIRouter 维护并落盘）。
+	// 与 cfg.AI.Provider 的关系：
+	//   - cfg.AI.Provider          = 用户偏好的"主 provider"
+	//   - cfg.AI.Failover.CurrentActive = 此刻真正在用的 provider（可能因故障转移变化）
+	CurrentActive string `mapstructure:"current_active" yaml:"current_active,omitempty"`
+	// LastSwitchedAt 最近一次切换时间（Unix 秒，0 表示从未切换）
+	LastSwitchedAt int64 `mapstructure:"last_switched_at" yaml:"last_switched_at,omitempty"`
 }
 
 // AIConfig AI 功能配置
@@ -162,6 +213,17 @@ type AIConfig struct {
 	CacheTTLHours     int `mapstructure:"cache_ttl_hours"`
 	MaxConcurrent     int `mapstructure:"max_concurrent"`
 	RequestIntervalMs int `mapstructure:"request_interval_ms"`
+
+	// ==================== Token 用量预算（V7：智能切换机制） ====================
+	// MonthlyTokenBudget 月度 token 预算（prompt + completion 之和）。
+	//   0 表示不限制；> 0 时，AIRouter 会在用量达到 WarningThresholdPct 时发出预警，
+	//   达到 100% 时拒绝请求或触发故障转移到链路上的下一个 provider。
+	MonthlyTokenBudget int64 `mapstructure:"monthly_token_budget" yaml:"monthly_token_budget,omitempty"`
+	// WarningThresholdPct 用量预警阈值（百分比，0~100）。默认 80。
+	WarningThresholdPct int `mapstructure:"warning_threshold_pct" yaml:"warning_threshold_pct,omitempty"`
+
+	// Failover 智能切换 / 故障转移配置（V7）
+	Failover AIFailoverConfig `mapstructure:"failover" yaml:"failover,omitempty"`
 
 	// ==================== ASR / Whisper 云端 API 独立配置 ====================
 	// Whisper API 独立地址（留空则复用 APIBase）
@@ -593,6 +655,33 @@ func Load() (*Config, error) {
 	//    这里将自动生成的 secret 持久化到 data 目录，后续启动优先读取该文件。
 	if cfg.Secrets.JWTSecret == "nowen-video-secret-change-me" {
 		cfg.Secrets.JWTSecret = loadOrCreatePersistedSecret(cfg.App.DataDir)
+	}
+
+	// 8. 解密 AI API Key（兼容老明文：未加密的字段会被 Decrypt 直接返回）
+	//    解密失败仅记录警告，不阻断启动；用户可通过前端重新填写 key 来修复。
+	if dec, err := secretcrypto.Decrypt(cfg.AI.APIKey); err == nil {
+		cfg.AI.APIKey = dec
+	}
+	if cfg.AI.Profiles != nil {
+		decProfiles := make(map[string]AIProviderProfile, len(cfg.AI.Profiles))
+		for k, p := range cfg.AI.Profiles {
+			if dec, err := secretcrypto.Decrypt(p.APIKey); err == nil {
+				p.APIKey = dec
+			}
+			decProfiles[k] = p
+		}
+		cfg.AI.Profiles = decProfiles
+	}
+
+	// 9. AI Failover 默认值兜底
+	if cfg.AI.WarningThresholdPct <= 0 || cfg.AI.WarningThresholdPct > 100 {
+		cfg.AI.WarningThresholdPct = 80
+	}
+	if cfg.AI.Failover.ConsecutiveErrorThreshold <= 0 {
+		cfg.AI.Failover.ConsecutiveErrorThreshold = 3
+	}
+	if cfg.AI.Failover.AutoRecoverAfterMin < 0 {
+		cfg.AI.Failover.AutoRecoverAfterMin = 0
 	}
 
 	return cfg, nil
@@ -1105,6 +1194,22 @@ func (c *Config) SaveAIConfig() error {
 
 	ac := c.AI
 
+	// 加密顶层 / profiles 中的 api_key（幂等：已加密的不会重复加密）
+	// 错误仅记录不阻断过程，退而存明文以保证设置不丢失
+	if enc, err := secretcrypto.Encrypt(ac.APIKey); err == nil {
+		ac.APIKey = enc
+	}
+	if ac.Profiles != nil {
+		encProfiles := make(map[string]AIProviderProfile, len(ac.Profiles))
+		for k, p := range ac.Profiles {
+			if enc, err := secretcrypto.Encrypt(p.APIKey); err == nil {
+				p.APIKey = enc
+			}
+			encProfiles[k] = p
+		}
+		ac.Profiles = encProfiles
+	}
+
 	// 1. 同步到全局 viper（ai.* 命名空间）
 	viper.Set("ai.enabled", ac.Enabled)
 	viper.Set("ai.auto_pilot", ac.AutoPilot)
@@ -1121,18 +1226,32 @@ func (c *Config) SaveAIConfig() error {
 	viper.Set("ai.cache_ttl_hours", ac.CacheTTLHours)
 	viper.Set("ai.max_concurrent", ac.MaxConcurrent)
 	viper.Set("ai.request_interval_ms", ac.RequestIntervalMs)
+	// V7：Token 预算与智能切换
+	viper.Set("ai.monthly_token_budget", ac.MonthlyTokenBudget)
+	viper.Set("ai.warning_threshold_pct", ac.WarningThresholdPct)
+	viper.Set("ai.failover.enabled", ac.Failover.Enabled)
+	viper.Set("ai.failover.chain", ac.Failover.Chain)
+	viper.Set("ai.failover.auto_recover_after_min", ac.Failover.AutoRecoverAfterMin)
+	viper.Set("ai.failover.consecutive_error_threshold", ac.Failover.ConsecutiveErrorThreshold)
+	viper.Set("ai.failover.current_active", ac.Failover.CurrentActive)
+	viper.Set("ai.failover.last_switched_at", ac.Failover.LastSwitchedAt)
 	if ac.Profiles != nil {
-		// 转换为可被 yaml 序列化的 map[string]map[string]string 形式
-		profilesMap := make(map[string]map[string]string, len(ac.Profiles))
+		// 转换为可被 yaml 序列化的 map[string]map[string]interface{} 形式
+		profilesMap := make(map[string]map[string]interface{}, len(ac.Profiles))
 		for k, p := range ac.Profiles {
-			profilesMap[k] = map[string]string{
+			profilesMap[k] = map[string]interface{}{
 				"api_base": p.APIBase,
 				"api_key":  p.APIKey,
 				"model":    p.Model,
+				"enabled":  p.Enabled,
 			}
 		}
 		viper.Set("ai.profiles", profilesMap)
 	}
+
+	// 同步加密后的值到内存双向（避免后续液态读到明文）
+	c.AI.APIKey = ac.APIKey
+	c.AI.Profiles = ac.Profiles
 
 	// 2. 优先写入 config/ai.yaml 分片文件（保持原架构，不污染主 config.yaml）
 	if err := c.writeAIYaml(); err != nil {
@@ -1182,14 +1301,24 @@ func (c *Config) writeAIYaml() error {
 	subViper.Set("cache_ttl_hours", ac.CacheTTLHours)
 	subViper.Set("max_concurrent", ac.MaxConcurrent)
 	subViper.Set("request_interval_ms", ac.RequestIntervalMs)
+	// V7
+	subViper.Set("monthly_token_budget", ac.MonthlyTokenBudget)
+	subViper.Set("warning_threshold_pct", ac.WarningThresholdPct)
+	subViper.Set("failover.enabled", ac.Failover.Enabled)
+	subViper.Set("failover.chain", ac.Failover.Chain)
+	subViper.Set("failover.auto_recover_after_min", ac.Failover.AutoRecoverAfterMin)
+	subViper.Set("failover.consecutive_error_threshold", ac.Failover.ConsecutiveErrorThreshold)
+	subViper.Set("failover.current_active", ac.Failover.CurrentActive)
+	subViper.Set("failover.last_switched_at", ac.Failover.LastSwitchedAt)
 
 	if ac.Profiles != nil {
-		profilesMap := make(map[string]map[string]string, len(ac.Profiles))
+		profilesMap := make(map[string]map[string]interface{}, len(ac.Profiles))
 		for k, p := range ac.Profiles {
-			profilesMap[k] = map[string]string{
+			profilesMap[k] = map[string]interface{}{
 				"api_base": p.APIBase,
 				"api_key":  p.APIKey,
 				"model":    p.Model,
+				"enabled":  p.Enabled,
 			}
 		}
 		subViper.Set("profiles", profilesMap)

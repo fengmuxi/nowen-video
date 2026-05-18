@@ -55,6 +55,9 @@ type Repositories struct {
 	Rename *RenameRepo
 	// 扫描后处理：虚拟归类与命名映射（仅 DB 层）
 	ScanClassification *ScanClassificationRepo
+	// V7: AI 用量记录与故障转移日志
+	AIUsage    *AIUsageRepo
+	AIFailover *AIFailoverLogRepo
 }
 
 func NewRepositories(db *gorm.DB) *Repositories {
@@ -107,6 +110,9 @@ func NewRepositories(db *gorm.DB) *Repositories {
 		Rename: NewRenameRepo(db),
 		// 扫描后处理
 		ScanClassification: NewScanClassificationRepo(db),
+		// V7: AI 用量记录与故障转移日志
+		AIUsage:    NewAIUsageRepo(db),
+		AIFailover: NewAIFailoverLogRepo(db),
 	}
 }
 

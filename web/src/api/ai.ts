@@ -67,6 +67,39 @@ export const aiApi = {
   // 测试推荐理由（管理员）
   testRecommendReason: (title: string, genres: string) =>
     api.post<{ data: AITestResult }>('/admin/ai/test/recommend', { title, genres }),
+
+  // ==================== V7：AI 智能调度器 / 用量监控 / 故障转移 ====================
+
+  // 列出所有 AI 提供商的开箱即用预设
+  listProviderPresets: () =>
+    api.get<{ data: import('@/types').AIProviderPreset[] }>('/admin/ai/presets'),
+
+  // 一键配置通义千问（仅需提供 api_key）
+  quickConfigQwen: (apiKey: string) =>
+    api.post<{ message: string; data: { status: import('@/types').AIStatus; test: import('@/types').AITestResult } }>(
+      '/admin/ai/quick-config/qwen',
+      { api_key: apiKey },
+    ),
+
+  // 获取 AIRouter 当前状态（首选/生效 provider、月用量、切换链等）
+  getRouterSnapshot: () =>
+    api.get<{ data: import('@/types').AIRouterSnapshot }>('/admin/ai/router'),
+
+  // 强制切换到指定 provider
+  forceSwitchProvider: (provider: string) =>
+    api.post<{ message: string; data: import('@/types').AIRouterSnapshot }>('/admin/ai/router/switch', { provider }),
+
+  // 恢复主 provider
+  restoreProvider: () =>
+    api.post<{ message: string; data: import('@/types').AIRouterSnapshot }>('/admin/ai/router/restore'),
+
+  // 切换审计日志
+  listFailoverLogs: (limit = 100) =>
+    api.get<{ data: import('@/types').AIFailoverLog[] }>('/admin/ai/router/logs', { params: { limit } }),
+
+  // 用量曲线（按天聚合）
+  getUsageBuckets: (range: 'day' | 'week' | 'month' | 'year' = 'month', provider?: string) =>
+    api.get<{ data: import('@/types').AIUsageReport }>('/admin/ai/usage', { params: { range, provider } }),
 }
 
 // ==================== AI 助手 ====================

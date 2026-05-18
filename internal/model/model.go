@@ -838,6 +838,9 @@ func AutoMigrate(db *gorm.DB) error {
 		&MediaClassification{},
 		// 懒人入库（Lazy Ingest）任务
 		&IngestJob{},
+		// V7: AI 用量记录与故障转移日志
+		&AIUsageRecord{},
+		&AIFailoverLog{},
 	); err != nil {
 		return err
 	}

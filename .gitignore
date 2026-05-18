@@ -42,6 +42,9 @@ config.yaml
 
 # 分片配置中的敏感信息文件（密钥、API Key 等）
 config/secrets.yaml
+config/.master.key
+config/*.key
+*.master.key
 
 # Android
 android/.gradle/

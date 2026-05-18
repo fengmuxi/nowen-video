@@ -101,6 +101,9 @@ type AIService struct {
 	// 错误日志（保留最近 50 条）
 	errorLogs []AIErrorLog
 	errorMu   sync.Mutex
+
+	// V7: 可选的智能路由（由 NewAIRouter 注入。为 nil 时边路以原逻辑走）
+	router *AIRouter
 }
 
 // aiCacheEntry 缓存条目
@@ -154,6 +157,26 @@ func NewAIService(cfg config.AIConfig, appCfg *config.Config, mediaRepo *reposit
 	}
 
 	return s
+}
+
+// SetRouter 注入 AI 智能路由器（V7：故障转移与用量监控）
+//
+// 与 NewAIRouter 配合：
+//   - NewAIRouter(ai, ...) 内部会调用 ai.SetRouter(r)
+//   - 之后 ChatCompletion 的成功/失败钩子都会回调 router
+//
+// 二次设置会覆盖（用于运行时替换 router 实现，例如热升级测试）。
+func (s *AIService) SetRouter(r *AIRouter) {
+	s.cfgMu.Lock()
+	s.router = r
+	s.cfgMu.Unlock()
+}
+
+// Router 返回当前注入的 router（可能为 nil）
+func (s *AIService) Router() *AIRouter {
+	s.cfgMu.RLock()
+	defer s.cfgMu.RUnlock()
+	return s.router
 }
 
 // IsEnabled 检查 AI 服务是否启用
@@ -259,6 +282,12 @@ func (s *AIService) ChatCompletion(systemPrompt, userPrompt string, temperature 
 	// 并且避免与 UpdateConfig 发生“concurrent map read and map write”。
 	cfg := s.snapshotCfg()
 
+	// V7：走热路径时顺便检查主 provider 是否可自动恢复
+	if s.router != nil {
+		s.router.MaybeAutoRecover()
+		cfg = s.snapshotCfg()
+	}
+
 	// 云端强制：拦截本地 AI（如 ollama），避免「全自动托管」语义下走本地推理
 	if cfg.BlockLocalAI && isLocalAIProvider(cfg.Provider, cfg.APIBase) {
 		return "", fmt.Errorf("当前系统禁止本地 AI（provider=%s），请在 AI 配置中选择云端服务商（OpenAI/DeepSeek/通义千问）", cfg.Provider)
@@ -346,6 +375,11 @@ func (s *AIService) ChatCompletion(systemPrompt, userPrompt string, temperature 
 			result := strings.TrimSpace(chatResp.Choices[0].Message.Content)
 			s.logger.Debugf("AI 调用成功 (tokens: %d+%d=%d, attempt=%d)",
 				chatResp.Usage.PromptTokens, chatResp.Usage.CompletionTokens, chatResp.Usage.TotalTokens, attempt)
+			// V7：通知路由器记录用量
+			if s.router != nil {
+				s.router.MarkSuccess(cfg.Provider, cfg.Model,
+					chatResp.Usage.PromptTokens, chatResp.Usage.CompletionTokens, 0, "chat_completion")
+			}
 			return result, nil
 		}
 
@@ -372,6 +406,10 @@ func (s *AIService) ChatCompletion(systemPrompt, userPrompt string, temperature 
 		// 不可重试 / 已达上限
 		s.logger.Warnf("AI API 返回错误 (HTTP %d): %s", resp.StatusCode, string(respBody))
 		s.addErrorLog("chat_completion", errMsg, 0)
+		// V7：通知路由器试图切换（这里不另外重试，避免双重试逻辑交叉）
+		if s.router != nil {
+			s.router.MarkFailure(cfg.Provider, resp.StatusCode, string(respBody))
+		}
 		return "", errMsg
 	}
 
@@ -379,6 +417,10 @@ func (s *AIService) ChatCompletion(systemPrompt, userPrompt string, temperature 
 		lastErr = fmt.Errorf("AI 调用失败（未知原因）")
 	}
 	s.addErrorLog("chat_completion", lastErr, 0)
+	// V7：重试后仍失败（网络错误路径），同样平衡给 router
+	if s.router != nil {
+		s.router.MarkFailure(cfg.Provider, 0, lastErr.Error())
+	}
 	return "", lastErr
 }
 
@@ -638,11 +680,23 @@ func (s *AIService) GetStatus() map[string]interface{} {
 	// 多 provider 配置档案（key 字段脱敏，仅返回 api_key_configured 标识）
 	profilesView := make(map[string]map[string]interface{}, len(cfg.Profiles))
 	for id, p := range cfg.Profiles {
-		profilesView[id] = map[string]interface{}{
+		view := map[string]interface{}{
 			"api_base":           p.APIBase,
 			"model":              p.Model,
 			"api_key_configured": p.APIKey != "",
+			"enabled":            p.Enabled,
 		}
+		// V8：模型级 failover 元信息
+		if p.CurrentModel != "" {
+			view["current_model"] = p.CurrentModel
+		}
+		// 即便 ModelChain 为空也返回空数组，方便前端识别
+		if p.ModelChain == nil {
+			view["model_chain"] = []string{}
+		} else {
+			view["model_chain"] = p.ModelChain
+		}
+		profilesView[id] = view
 	}
 	status["profiles"] = profilesView
 
@@ -801,12 +855,40 @@ func (s *AIService) mergeProfilesUpdate(val interface{}) {
 		if v, ok := pm["api_key"].(string); ok && v != "" {
 			next.APIKey = v
 		}
+		// V8：enabled / model_chain / current_model 合并
+		if v, ok := pm["enabled"].(bool); ok {
+			next.Enabled = v
+		}
+		if v, ok := pm["current_model"].(string); ok {
+			next.CurrentModel = v
+		}
+		if v, ok := pm["model_chain"]; ok {
+			// 接受 []string、[]interface{}（前端 JSON 传过来通常是 []interface{}）
+			switch arr := v.(type) {
+			case []string:
+				next.ModelChain = append([]string{}, arr...)
+			case []interface{}:
+				out := make([]string, 0, len(arr))
+				for _, item := range arr {
+					if s, ok := item.(string); ok {
+						s = strings.TrimSpace(s)
+						if s != "" {
+							out = append(out, s)
+						}
+					}
+				}
+				next.ModelChain = out
+			}
+		}
 		s.cfg.Profiles[providerID] = next
 	}
 }
 
 // syncActiveProfile 把当前激活 provider 的顶层字段同步到 profiles 表
-// 确保「顶层即激活档案」的不变式
+// 确保「顶层即激活档案」的不变式。
+//
+// 注意：此函数应**保留**目标 profile 中的 Enabled / ModelChain / CurrentModel
+// 等"非顶层管理"字段，仅同步 api_base / api_key / model。
 func (s *AIService) syncActiveProfile() {
 	if s.cfg.Provider == "" {
 		return
@@ -814,11 +896,15 @@ func (s *AIService) syncActiveProfile() {
 	if s.cfg.Profiles == nil {
 		s.cfg.Profiles = make(map[string]config.AIProviderProfile)
 	}
-	s.cfg.Profiles[s.cfg.Provider] = config.AIProviderProfile{
-		APIBase: s.cfg.APIBase,
-		APIKey:  s.cfg.APIKey,
-		Model:   s.cfg.Model,
+	existing := s.cfg.Profiles[s.cfg.Provider]
+	existing.APIBase = s.cfg.APIBase
+	existing.APIKey = s.cfg.APIKey
+	existing.Model = s.cfg.Model
+	// 激活的 provider 默认是 enabled（避免老的 enabled:false 卡住后续 failover 链）
+	if !existing.Enabled {
+		existing.Enabled = true
 	}
+	s.cfg.Profiles[s.cfg.Provider] = existing
 }
 
 // ==================== 连接测试 ====================

@@ -89,6 +89,8 @@ type Services struct {
 	LazyIngest *LazyIngestService
 	// AI 成本：模型 catalog + 估价 + 累计花费
 	AICost *AICostService
+	// V7: AI 智能路由器（故障转移 / 用量监控 / 阈值预警）
+	AIRouter *AIRouter
 }
 
 func NewServices(repos *repository.Repositories, cfg *config.Config, logger *zap.SugaredLogger) *Services {
@@ -394,6 +396,12 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, logger *zap
 
 	// AI 成本估算服务（无状态，仅依赖 AIService 取累计 token）
 	svcs.AICost = NewAICostService(aiService)
+
+	// V7：AI 智能路由器（故障转移 / 用量监控 / 阈值预警）
+	// 构造函数内部会调用 aiService.SetRouter(r) 进行双向注入。
+	svcs.AIRouter = NewAIRouter(aiService, svcs.AICost, repos.AIUsage, repos.AIFailover, cfg, logger)
+	// 启动时从库里装载当月已用 token（报表连续性）
+	svcs.AIRouter.LoadMonthUsage()
 
 	// 启动调度器（后台循环，默认未启用，需配置开启）
 	adultScheduler.Start()
