@@ -158,6 +158,48 @@ export const categoryDisplay: Record<string, string> = {
   other: '其他',
 }
 
+// === Emby/Jellyfin CollectionType 对齐 ===
+// 后端 (handler.go) 只识别 7 种：movies / tvshows / music / photos / mixed / homevideos / boxsets。
+// 业务侧的 anime/documentary/variety 等本质是 "TV Shows + Genre" 的子集，
+// adult 客户端不可见时退化为 mixed。
+export type EmbyCollectionType =
+  | 'movies'
+  | 'tvshows'
+  | 'music'
+  | 'photos'
+  | 'mixed'
+  | 'homevideos'
+  | 'boxsets'
+
+export const embyCollectionTypeDisplay: Record<EmbyCollectionType, string> = {
+  movies: 'Movies',
+  tvshows: 'TV Shows',
+  music: 'Music',
+  photos: 'Photos',
+  mixed: 'Mixed',
+  homevideos: 'Home Videos',
+  boxsets: 'Box Sets',
+}
+
+// 业务类别 → Emby CollectionType 映射（用于 UI 徽章；后端无需改动）
+export const categoryToEmbyCollectionType: Record<string, EmbyCollectionType> = {
+  movie: 'movies',
+  tvshow: 'tvshows',
+  anime: 'tvshows', // 动画归入 TV Shows + Genre=Anime
+  documentary: 'tvshows', // 纪录片归入 TV Shows + Genre=Documentary（Emby 客户端默认行为）
+  variety: 'tvshows', // 综艺归入 TV Shows + Genre=Reality/Variety
+  music: 'music',
+  adult: 'mixed',
+  other: 'mixed',
+}
+
+// 业务类别在 NFO 里推荐写入的 Genre 标签（Emby 客户端会按此分面）
+export const categoryToEmbyGenre: Record<string, string> = {
+  anime: 'Anime',
+  documentary: 'Documentary',
+  variety: 'Reality',
+}
+
 export const regionDisplay: Record<string, string> = {
   CN: '中国大陆',
   HK: '中国香港',

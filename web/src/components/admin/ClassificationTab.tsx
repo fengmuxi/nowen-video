@@ -8,6 +8,10 @@ import {
   regionDisplay,
   statusDisplay,
   statusColor,
+  categoryToEmbyCollectionType,
+  categoryToEmbyGenre,
+  embyCollectionTypeDisplay,
+  type EmbyCollectionType,
 } from '@/api/scanClassify'
 import { libraryApi, aiApi } from '@/api'
 import type { Library } from '@/types'
@@ -52,14 +56,14 @@ import SmartRenameDrawer from '@/components/SmartRenameDrawer'
 
 const CATEGORY_OPTIONS: { value: ClassificationCategory | ''; label: string }[] = [
   { value: '', label: '全部类别' },
-  { value: 'movie', label: '电影' },
-  { value: 'tvshow', label: '剧集' },
-  { value: 'anime', label: '动画' },
-  { value: 'documentary', label: '纪录片' },
-  { value: 'variety', label: '综艺' },
-  { value: 'music', label: '音乐' },
-  { value: 'adult', label: '成人' },
-  { value: 'other', label: '其他' },
+  { value: 'movie', label: '电影  ·  Movies' },
+  { value: 'tvshow', label: '剧集  ·  TV Shows' },
+  { value: 'anime', label: '动画  ·  TV Shows / Genre=Anime' },
+  { value: 'documentary', label: '纪录片  ·  TV Shows / Genre=Documentary' },
+  { value: 'variety', label: '综艺  ·  TV Shows / Genre=Reality' },
+  { value: 'music', label: '音乐  ·  Music' },
+  { value: 'adult', label: '成人  ·  Mixed' },
+  { value: 'other', label: '其他  ·  Mixed' },
 ]
 
 const REGION_OPTIONS = [
@@ -466,6 +470,24 @@ export default function ClassificationTab() {
     return null as number | null
   }, [])
 
+  // 仿照 Emby CollectionType 聚合：业务类别 → movies/tvshows/music/mixed
+  const embyDistribution = useMemo(() => {
+    const buckets: Record<EmbyCollectionType, number> = {
+      movies: 0,
+      tvshows: 0,
+      music: 0,
+      photos: 0,
+      mixed: 0,
+      homevideos: 0,
+      boxsets: 0,
+    }
+    ;(stats?.by_category || []).forEach((b) => {
+      const ct = categoryToEmbyCollectionType[b.key] || 'mixed'
+      buckets[ct] += b.count
+    })
+    return buckets
+  }, [stats])
+
   return (
     <div className="space-y-5">
       {/* ============ 行动召唤区 ============ */}
@@ -478,7 +500,7 @@ export default function ClassificationTab() {
             <div>
               <h2 className="text-lg font-semibold">智能归类</h2>
               <p className="mt-0.5 text-xs text-surface-400">
-                AI 识别 → 智能分类 → 建议名称（仅写数据库，不动磁盘）
+                AI 识别 → 智能分类 → 建议名称  ·  输出对齐 <span className="text-emerald-300">Emby / Jellyfin</span> 规范（仅写数据库，不动磁盘）
               </p>
             </div>
           </div>
@@ -669,6 +691,66 @@ export default function ClassificationTab() {
           subtitle={aiReady === false ? '未配置' : ''}
         />
       </div>
+
+      {/* ============ Emby 库分布条（按 CollectionType 聚合）============ */}
+      {stats && stats.total > 0 && (
+        <div className="glass-panel-subtle rounded-xl p-3">
+          <div className="mb-2 flex items-center justify-between text-xs">
+            <span className="text-surface-400">
+              Emby / Jellyfin 库分布 · <span className="text-surface-300">CollectionType</span>
+            </span>
+            <span className="text-[10px] text-surface-500">
+              对齐官方枚举：movies / tvshows / music / mixed · 仅作预览
+            </span>
+          </div>
+          <div className="flex h-2 w-full overflow-hidden rounded-full bg-surface-900">
+            {(['movies', 'tvshows', 'music', 'mixed'] as EmbyCollectionType[]).map((ct) => {
+              const v = embyDistribution[ct] || 0
+              const pct = stats.total > 0 ? (v / stats.total) * 100 : 0
+              if (pct <= 0) return null
+              const color: Record<EmbyCollectionType, string> = {
+                movies: 'bg-sky-500',
+                tvshows: 'bg-violet-500',
+                music: 'bg-pink-500',
+                photos: 'bg-orange-500',
+                mixed: 'bg-zinc-500',
+                homevideos: 'bg-emerald-500',
+                boxsets: 'bg-yellow-500',
+              }
+              return (
+                <div
+                  key={ct}
+                  className={clsx('h-full', color[ct])}
+                  style={{ width: `${pct}%` }}
+                  title={`${embyCollectionTypeDisplay[ct]} · ${v} 条 (${pct.toFixed(1)}%)`}
+                />
+              )
+            })}
+          </div>
+          <div className="mt-2 flex flex-wrap gap-3 text-[11px]">
+            {(['movies', 'tvshows', 'music', 'mixed'] as EmbyCollectionType[]).map((ct) => {
+              const v = embyDistribution[ct] || 0
+              if (v <= 0) return null
+              const dot: Record<EmbyCollectionType, string> = {
+                movies: 'bg-sky-500',
+                tvshows: 'bg-violet-500',
+                music: 'bg-pink-500',
+                photos: 'bg-orange-500',
+                mixed: 'bg-zinc-500',
+                homevideos: 'bg-emerald-500',
+                boxsets: 'bg-yellow-500',
+              }
+              return (
+                <span key={ct} className="flex items-center gap-1.5 text-surface-300">
+                  <span className={clsx('h-2 w-2 rounded-full', dot[ct])} />
+                  <span className="font-medium">{embyCollectionTypeDisplay[ct]}</span>
+                  <span className="text-surface-500">{v.toLocaleString()}</span>
+                </span>
+              )
+            })}
+          </div>
+        </div>
+      )}
 
       {/* ============ 快捷标签 + 搜索 ============ */}
       <div className="glass-panel-subtle rounded-xl p-3">
@@ -1055,6 +1137,10 @@ function Row({
             )}
           </div>
           <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-surface-400">
+            {/* Emby CollectionType 徽章（帮助用户预览在 Emby/Jellyfin 客户端中会落哪个库）*/}
+            {item.category && (
+              <EmbyCollectionBadge category={item.category as string} />
+            )}
             <span>{categoryDisplay[item.category as string] || item.category || '—'}</span>
             {item.region && <span>· {regionDisplay[item.region] || item.region}</span>}
             {item.decade && <span>· {item.decade}</span>}
@@ -1100,31 +1186,62 @@ function Row({
         </div>
       </div>
 
-      {/* 展开详情：核心 4 项 + 完整折叠（专家模式才显示） */}
+      {/* 展开详情：Emby NFO 字段顺序对齐（title / sortname / year / genre / country / tmdb / imdb / suggested）*/}
       {expanded && (
         <div className="mt-3 grid grid-cols-1 gap-2 rounded-lg bg-[var(--nav-hover-bg)] p-3 text-xs md:grid-cols-2">
-          <KV label="原文件路径" value={item.media_id} mono />
+          {/* === 识别结果（对应 NFO 顺序）=== */}
+          <KV label="Title · 主标题" value={item.parsed_title || '—'} />
+          {item.parsed_title_alt && (
+            <KV label="OriginalTitle · 原名" value={item.parsed_title_alt} />
+          )}
+          <KV label="Year · 年份" value={item.parsed_year > 0 ? String(item.parsed_year) : '—'} />
           <KV
-            label="建议名称"
-            value={item.suggested_name || '—'}
+            label="Genre · 类型标签"
+            value={
+              [
+                categoryDisplay[item.category as string] || '',
+                categoryToEmbyGenre[item.category as string] || '',
+                item.genre_tags || '',
+              ]
+                .filter(Boolean)
+                .join(' / ') || '—'
+            }
+          />
+          <KV
+            label="Country / Region · 国家地区"
+            value={item.region ? regionDisplay[item.region] || item.region : '—'}
+          />
+          <KV
+            label="TMDb ID"
+            value={item.parsed_tmdb_id > 0 ? String(item.parsed_tmdb_id) : '—'}
             mono
           />
+          <KV label="IMDb ID" value={item.parsed_imdb_id || '—'} mono />
+
+          {/* === 路径/建议重命名（仅写入数据库）=== */}
+          <div className="md:col-span-2 mt-1 border-t border-surface-700/40 pt-2">
+            <p className="mb-1 text-[10px] uppercase tracking-wider text-surface-500">
+              Emby/Jellyfin 建议命名（仅数据库映射，不会落盘）
+            </p>
+          </div>
+          <KV label="原文件路径" value={item.media_id} mono />
+          <KV label="建议名称" value={item.suggested_name || '—'} mono />
           <div className="md:col-span-2">
             <KV
-              label="建议路径（仅 DB 映射，不会落盘）"
+              label="建议路径（DB 映射）"
               value={item.suggested_full_path || '—'}
               mono
             />
           </div>
           {item.error_msg && (
             <div className="md:col-span-2">
-              <KV label="错误信息" value={item.error_msg} mono />
+              <KV label="Error · 错误信息" value={item.error_msg} mono />
             </div>
           )}
           {expertMode && (
             <>
-              <KV label="规范化类型" value={item.genre_tags || '—'} />
-              <KV label="语言" value={item.language_tag || '—'} />
+              <KV label="Language · 语言" value={item.language_tag || '—'} />
+              <KV label="Decade · 年代" value={item.decade || '—'} />
               <KV label="建议子目录" value={item.suggested_dir || '—'} mono />
               <KV label="命名风格" value={item.naming_style || 'jellyfin'} />
               {item.ai_invoked && (
@@ -1138,6 +1255,37 @@ function Row({
         </div>
       )}
     </div>
+  )
+}
+
+// ============ Emby CollectionType 徽章 ============
+//
+// 业务类别 → Emby 官方 CollectionType 映射，
+// 让用户一眼明白该条目会落在 Emby/Jellyfin 客户端哪个库。
+function EmbyCollectionBadge({ category }: { category: string }) {
+  const ct = categoryToEmbyCollectionType[category]
+  if (!ct) return null
+  const palette: Record<EmbyCollectionType, string> = {
+    movies: 'bg-sky-500/15 text-sky-300 border-sky-500/30',
+    tvshows: 'bg-violet-500/15 text-violet-300 border-violet-500/30',
+    music: 'bg-pink-500/15 text-pink-300 border-pink-500/30',
+    photos: 'bg-orange-500/15 text-orange-300 border-orange-500/30',
+    mixed: 'bg-zinc-500/15 text-zinc-300 border-zinc-500/30',
+    homevideos: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30',
+    boxsets: 'bg-yellow-500/15 text-yellow-300 border-yellow-500/30',
+  }
+  const subGenre = categoryToEmbyGenre[category]
+  return (
+    <span
+      className={clsx(
+        'inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-mono',
+        palette[ct],
+      )}
+      title={`Emby CollectionType: ${ct}${subGenre ? ` / Genre: ${subGenre}` : ''}`}
+    >
+      {embyCollectionTypeDisplay[ct]}
+      {subGenre && <span className="text-surface-300/80">/{subGenre}</span>}
+    </span>
   )
 }
 
