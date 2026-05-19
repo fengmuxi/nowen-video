@@ -274,6 +274,55 @@ func (s *ScanPostProcessService) ProcessBatch(mediaIDs []string) (int, error) {
 	return ok, nil
 }
 
+// CancelResult Cancel 方法的返回结构
+type CancelResult struct {
+	Drained      int   `json:"drained"`       // 从内存队列丢弃的待处理任务数
+	Marked       int64 `json:"marked"`        // 数据库中由 pending/running 改为 failed 的记录数
+	StillRunning bool  `json:"still_running"` // 是否有 worker 仍在处理已取出的任务（最多 1 条短时收尾）
+}
+
+// Cancel 停止当前进行中的扫描归类任务。
+//
+// 实现策略（务实派）：
+//   - 内存队列：非阻塞地 drain 掉所有待消费 mediaID（最多 QueueSize 次）；
+//   - 数据库：把对应范围内 pending/running 的分类记录改为 failed，并打上「[cancelled]」标记；
+//   - 正在被 worker 处理的那一条不强行打断（一条耗时通常 < 数秒），让其自然结束；
+//     若它收尾时仍写回 processed，则视同已完成，不再被覆盖；这是可接受的边缘情况。
+//
+// libraryID 为空 → 影响所有库；非空 → 仅影响该库。
+func (s *ScanPostProcessService) Cancel(libraryID string) (CancelResult, error) {
+	res := CancelResult{}
+
+	// 1) Drain 内存队列
+	drained := 0
+DrainLoop:
+	for {
+		select {
+		case <-s.queue:
+			drained++
+		default:
+			break DrainLoop
+		}
+	}
+	res.Drained = drained
+
+	// 2) 把 DB 中 pending/running 状态的记录改写为 failed（带取消标记）
+	marked, err := s.repo.MarkPendingCancelled(libraryID)
+	if err != nil {
+		s.logger.Warnf("[ScanPostProcess] 取消时回写 DB 失败 library_id=%s err=%v", libraryID, err)
+		return res, err
+	}
+	res.Marked = marked
+
+	// 3) 标记是否还有 worker 在处理（最多 1 条；用 worker 数判断）
+	s.mu.Lock()
+	res.StillRunning = s.started && s.cfg.Workers > 0 && len(s.queue) == 0
+	s.mu.Unlock()
+
+	s.logger.Infof("[ScanPostProcess] 已取消扫描 library_id=%s drained=%d marked_failed=%d", libraryID, drained, marked)
+	return res, nil
+}
+
 // ReprocessLibrary 整库重跑：清理旧记录并重新入队
 //
 // libraryID 为空时进入「全部媒体库」模式：枚举所有 Library 并逐个重跑，
@@ -468,9 +517,15 @@ func (s *ScanPostProcessService) identify(media *model.Media, c *model.MediaClas
 				}
 			}
 		} else if err != nil {
-			// AI 失败 → 不影响整体流程，仅降级为 partial
+			// AI 失败 → 不影响整体流程；
+			// 但若规则解析已经拿到核心字段（标题 + 年份 / 季集），
+			// 就保留 processed 状态，避免列表上一片"待修正"假阳性。
 			s.logger.Warnf("[ScanPostProcess] AI 识别失败 file=%s err=%v", srcName, err)
-			c.Status = model.ClassificationStatusPartial
+			ruleHasCoreFields := parsed.Title != "" &&
+				(parsed.Year > 0 || parsed.Season > 0 || parsed.Episode > 0)
+			if !ruleHasCoreFields {
+				c.Status = model.ClassificationStatusPartial
+			}
 		}
 	}
 
@@ -563,7 +618,9 @@ func (s *ScanPostProcessService) callAIIdentify(srcName string, hint scanPostPar
 请按 JSON Schema 返回最终识别结果。`,
 		srcName, hint.Title, hint.TitleAlt, hint.Year, hint.TMDbID, hint.IMDbID)
 
-	raw, err := s.ai.ChatCompletion(sysPrompt, userPrompt, 0.2, 512)
+	// max_tokens 调大到 1024：R1 / Distill 系列模型有 <think> 推理段，
+	// 512 经常被推理段吃完导致 JSON 输出截断（unexpected end of JSON input）。
+	raw, err := s.ai.ChatCompletion(sysPrompt, userPrompt, 0.2, 1024)
 	if err != nil {
 		return nil, "", err
 	}

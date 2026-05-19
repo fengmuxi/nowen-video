@@ -128,22 +128,18 @@ export default function HeroSection({
             {/* 海报 */}
             <div className="hidden flex-shrink-0 sm:block">
               <div
-                className="relative w-52 overflow-hidden rounded-xl shadow-2xl transition-transform duration-500 hover:scale-[1.02]"
-                style={{
-                  border: '1px solid var(--border-strong)',
-                  boxShadow: 'var(--shadow-elevated), 0 0 1px var(--neon-blue-30)',
-                }}
+                className="hero-poster-frame relative w-52 overflow-hidden rounded-xl transition-all duration-500 hover:scale-[1.02] flex items-center justify-center"
+                style={{ minHeight: '13rem' }}
               >
                 <img
                   src={streamApi.getPosterUrl(media.id, posterVersion)}
                   alt={media.title}
-                  className={clsx('w-full object-cover', posterFailed && 'hidden')}
-                  style={{ aspectRatio: '2/3' }}
+                  className={clsx('w-full h-auto max-h-[20rem] object-contain', posterFailed && 'hidden')}
                   loading="eager"
                   onError={() => setPosterFailed(true)}
                 />
                 {posterFailed && (
-                  <div className="flex items-center justify-center" style={{ aspectRatio: '2/3', background: 'var(--bg-surface)', color: 'var(--text-muted)' }}>
+                  <div className="flex items-center justify-center w-full" style={{ aspectRatio: '2/3', background: 'var(--bg-surface)', color: 'var(--text-muted)' }}>
                     <Film size={48} />
                   </div>
                 )}

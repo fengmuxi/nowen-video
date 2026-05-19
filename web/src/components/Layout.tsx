@@ -97,7 +97,8 @@ export default function Layout() {
 
           <div className={`px-4 py-6 sm:px-6 lg:px-8 transition-all duration-300 ${
             // 需要全宽展示的页面（文件管理、预处理等）不限制最大宽度
-            ['/files', '/preprocess', '/subtitle-preprocess', '/admin', '/collections'].some(p => location.pathname.startsWith(p))
+            // 注：/preprocess 前缀已涵盖 /preprocess/subtitle，无需单独列出 /subtitle-preprocess
+            ['/files', '/preprocess', '/admin', '/collections'].some(p => location.pathname.startsWith(p))
               ? 'w-full'
               : 'mx-auto max-w-7xl'
           }`}>

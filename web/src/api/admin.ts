@@ -5,8 +5,6 @@ import type {
   TranscodeJob,
   TMDbConfigStatus,
   ListResponse,
-  ScheduledTask,
-  CreateScheduledTaskRequest,
   UserPermission,
   UpdatePermissionRequest,
   ContentRating,
@@ -75,6 +73,55 @@ export const adminApi = {
   cancelTranscode: (taskId: string) =>
     api.post(`/admin/transcode/${taskId}/cancel`),
 
+  // ==================== 转码任务面板（与预处理交互对齐） ====================
+  // 注意：路径使用 /admin/transcode-tasks，避免与 /admin/transcode/:taskId/cancel 的 Gin 路由冲突
+  listTranscodeTasks: (page?: number, pageSize?: number, status?: string) =>
+    api.get<{ data: { tasks: TranscodeJob[]; total: number; page: number; page_size: number } }>(
+      '/admin/transcode-tasks',
+      { params: { page: page || 1, page_size: pageSize || 20, status: status || '' } }
+    ),
+
+  getTranscodeStatistics: () =>
+    api.get<{ data: import('@/types').TranscodeStatistics }>('/admin/transcode-tasks/statistics'),
+
+  cancelTranscodeTask: (taskId: string) =>
+    api.post<{ message: string }>(`/admin/transcode-tasks/${taskId}/cancel`),
+
+  retryTranscodeTask: (taskId: string) =>
+    api.post<{ message: string }>(`/admin/transcode-tasks/${taskId}/retry`),
+
+  deleteTranscodeTask: (taskId: string) =>
+    api.delete<{ message: string }>(`/admin/transcode-tasks/${taskId}`),
+
+  batchCancelTranscodeTasks: (taskIds: string[]) =>
+    api.post<{ message: string; data: { cancelled: number } }>(
+      '/admin/transcode-tasks/batch-cancel',
+      { task_ids: taskIds }
+    ),
+
+  batchDeleteTranscodeTasks: (taskIds: string[]) =>
+    api.post<{ message: string; data: { deleted: number } }>(
+      '/admin/transcode-tasks/batch-delete',
+      { task_ids: taskIds }
+    ),
+
+  batchRetryTranscodeTasks: (taskIds: string[]) =>
+    api.post<{ message: string; data: { retried: number } }>(
+      '/admin/transcode-tasks/batch-retry',
+      { task_ids: taskIds }
+    ),
+
+  // 选源批量提交转码（"转码任务"Tab 顶部的影视文件列表使用）
+  // qualities 缺省由后端回退为 ["720p"]，会按媒体原始分辨率自动过滤超分档位
+  batchSubmitTranscodeTasks: (mediaIds: string[], qualities?: string[]) =>
+    api.post<{
+      message: string
+      data: { submitted: number; skipped: number; tasks: TranscodeJob[]; errors?: string[] }
+    }>('/admin/transcode-tasks/batch-submit', {
+      media_ids: mediaIds,
+      qualities: qualities && qualities.length > 0 ? qualities : undefined,
+    }),
+
   // TMDb 配置管理
   getTMDbConfig: () =>
     api.get<{ data: TMDbConfigStatus }>('/admin/settings/tmdb'),
@@ -92,22 +139,6 @@ export const adminApi = {
   // 测试尚未保存的 TMDb API Key（保存前预检）
   testTMDbKey: (apiKey: string) =>
     api.post<{ data: { valid: boolean; message: string } }>('/admin/settings/tmdb/test', { api_key: apiKey }),
-
-  // 定时任务
-  listTasks: () =>
-    api.get<ListResponse<ScheduledTask>>('/admin/tasks'),
-
-  createTask: (data: CreateScheduledTaskRequest) =>
-    api.post<{ data: ScheduledTask }>('/admin/tasks', data),
-
-  updateTask: (id: string, data: { name: string; schedule: string; enabled: boolean }) =>
-    api.put(`/admin/tasks/${id}`, data),
-
-  deleteTask: (id: string) =>
-    api.delete(`/admin/tasks/${id}`),
-
-  runTaskNow: (id: string) =>
-    api.post(`/admin/tasks/${id}/run`),
 
   // 批量操作
   batchScan: (libraryIds: string[]) =>

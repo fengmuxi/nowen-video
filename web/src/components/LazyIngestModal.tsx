@@ -227,7 +227,7 @@ export default function LazyIngestModal({ isOpen, onClose, onCompleted }: Props)
           <div className="space-y-3">
             <div>
               <label className="mb-1.5 block text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
-                源目录 <span className="text-rose-400">*</span>
+                源目录 <span style={{ color: 'var(--accent-rose-text)' }}>*</span>
               </label>
               <input
                 type="text"
@@ -261,7 +261,7 @@ export default function LazyIngestModal({ isOpen, onClose, onCompleted }: Props)
               />
               <p className="mt-1 text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
                 仅使用硬链接：源文件 0 风险、瞬间完成、零额外空间。
-                <span className="ml-1" style={{ color: '#fbbf24' }}>⚠ 目标根必须与源目录在同一卷</span>
+                <span className="ml-1" style={{ color: 'var(--accent-amber-text)' }}>⚠ 目标根必须与源目录在同一卷</span>
                 （否则任务会立即拒绝执行）。
               </p>
             </div>
@@ -313,11 +313,14 @@ export default function LazyIngestModal({ isOpen, onClose, onCompleted }: Props)
                   onClick={() => setMode('move')}
                   className="flex-1 rounded-lg px-3 py-2 text-left transition-all"
                   style={{
-                    background: mode === 'move' ? 'rgba(244,63,94,0.10)' : 'transparent',
-                    border: `1px solid ${mode === 'move' ? '#f43f5e' : 'var(--border-default)'}`,
+                    background: mode === 'move' ? 'var(--accent-rose-bg)' : 'transparent',
+                    border: `1px solid ${mode === 'move' ? 'var(--accent-rose-border)' : 'var(--border-default)'}`,
                   }}
                 >
-                  <div className="text-xs font-medium" style={{ color: mode === 'move' ? '#fca5a5' : 'var(--text-primary)' }}>
+                  <div
+                    className="text-xs font-medium"
+                    style={{ color: mode === 'move' ? 'var(--accent-rose-text)' : 'var(--text-primary)' }}
+                  >
                     ⚡ 专家模式 · 原地移动
                   </div>
                   <div className="mt-0.5 text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
@@ -326,12 +329,31 @@ export default function LazyIngestModal({ isOpen, onClose, onCompleted }: Props)
                 </button>
               </div>
               {mode === 'move' && (
-                <div className="mt-2 rounded-lg px-3 py-2 text-[11px]" style={{ background: 'rgba(244,63,94,0.10)', color: '#fecaca' }}>
+                <div
+                  className="mt-2 rounded-lg px-3 py-2 text-[11px]"
+                  style={{
+                    background: 'var(--accent-rose-bg)',
+                    border: '1px solid var(--accent-rose-border)',
+                    color: 'var(--accent-rose-text)',
+                  }}
+                >
                   <div className="flex items-start gap-2">
-                    <ShieldAlert size={14} className="mt-0.5 flex-shrink-0" style={{ color: '#f43f5e' }} />
+                    <ShieldAlert
+                      size={14}
+                      className="mt-0.5 flex-shrink-0"
+                      style={{ color: 'var(--accent-rose)' }}
+                    />
                     <div>
-                      <div className="mb-1 font-medium" style={{ color: '#fca5a5' }}>⚠ 专家模式：该操作会真实移动源文件</div>
-                      <ul className="ml-3 list-disc space-y-0.5" style={{ color: '#fecaca' }}>
+                      <div
+                        className="mb-1 font-medium"
+                        style={{ color: 'var(--accent-rose-text)' }}
+                      >
+                        ⚠ 专家模式：该操作会真实移动源文件
+                      </div>
+                      <ul
+                        className="ml-3 list-disc space-y-0.5"
+                        style={{ color: 'var(--accent-rose-text)' }}
+                      >
                         <li>源目录中的文件位置会被重组，顶替原始结构</li>
                         <li>系统会记录 journal，完成后 30 天内可一键回滚</li>
                         <li>跨卷会被拒绝（与硬链接一致）</li>
@@ -343,7 +365,7 @@ export default function LazyIngestModal({ isOpen, onClose, onCompleted }: Props)
                           onChange={(e) => setMoveConfirmed(e.target.checked)}
                           className="h-3.5 w-3.5 cursor-pointer accent-rose-500"
                         />
-                        <span style={{ color: '#fca5a5' }}>我已了解：这会真实移动源文件</span>
+                        <span style={{ color: 'var(--accent-rose-text)' }}>我已了解：这会真实移动源文件</span>
                       </label>
                     </div>
                   </div>
@@ -352,7 +374,14 @@ export default function LazyIngestModal({ isOpen, onClose, onCompleted }: Props)
             </div>
 
             {errorMsg && (
-              <div className="flex items-start gap-2 rounded-lg px-3 py-2 text-xs" style={{ background: 'rgba(244,63,94,0.1)', color: '#fca5a5' }}>
+              <div
+                className="flex items-start gap-2 rounded-lg px-3 py-2 text-xs"
+                style={{
+                  background: 'var(--accent-rose-bg)',
+                  border: '1px solid var(--accent-rose-border)',
+                  color: 'var(--accent-rose-text)',
+                }}
+              >
                 <AlertTriangle size={14} className="mt-0.5 flex-shrink-0" />
                 <span>{errorMsg}</span>
               </div>
@@ -390,7 +419,7 @@ export default function LazyIngestModal({ isOpen, onClose, onCompleted }: Props)
                   className="h-full transition-all duration-500"
                   style={{
                     width: `${job.progress}%`,
-                    background: job.status === 'failed' ? '#f43f5e' : 'var(--neon)',
+                    background: job.status === 'failed' ? 'var(--accent-rose)' : 'var(--neon)',
                   }}
                 />
               </div>
@@ -418,7 +447,7 @@ export default function LazyIngestModal({ isOpen, onClose, onCompleted }: Props)
                 </div>
                 <div>
                   <span style={{ color: 'var(--text-tertiary)' }}>真实占用 </span>
-                  <span className="font-mono" style={{ color: '#34d399' }}>{formatBytes(stats.bytes_physical)}</span>
+                  <span className="font-mono" style={{ color: 'var(--accent-emerald-text)' }}>{formatBytes(stats.bytes_physical)}</span>
                   <span
                     className="ml-1.5 cursor-help"
                     style={{ color: 'var(--text-tertiary)' }}
@@ -430,7 +459,14 @@ export default function LazyIngestModal({ isOpen, onClose, onCompleted }: Props)
 
             {/* 回滚结果 */}
             {rollbackResult && (
-              <div className="rounded-lg px-3 py-2 text-xs" style={{ background: 'rgba(251,191,36,0.10)', color: '#fde68a' }}>
+              <div
+                className="rounded-lg px-3 py-2 text-xs"
+                style={{
+                  background: 'var(--accent-amber-bg)',
+                  border: '1px solid var(--accent-amber-border)',
+                  color: 'var(--accent-amber-text)',
+                }}
+              >
                 <div className="flex items-center gap-1.5">
                   <Undo2 size={12} />
                   <span>已回滚：还原 {rollbackResult.restored_mv} · 跳过 {rollbackResult.skipped_mv} · 清理空目录 {rollbackResult.removed_dir}</span>
@@ -458,7 +494,14 @@ export default function LazyIngestModal({ isOpen, onClose, onCompleted }: Props)
 
             {/* 错误 */}
             {job.error_message && (
-              <div className="flex items-start gap-2 rounded-lg px-3 py-2 text-xs" style={{ background: 'rgba(244,63,94,0.1)', color: '#fca5a5' }}>
+              <div
+                className="flex items-start gap-2 rounded-lg px-3 py-2 text-xs"
+                style={{
+                  background: 'var(--accent-rose-bg)',
+                  border: '1px solid var(--accent-rose-border)',
+                  color: 'var(--accent-rose-text)',
+                }}
+              >
                 <AlertTriangle size={14} className="mt-0.5 flex-shrink-0" />
                 <span className="break-all">{job.error_message}</span>
               </div>
@@ -466,7 +509,14 @@ export default function LazyIngestModal({ isOpen, onClose, onCompleted }: Props)
 
             {/* 完成后展示库 ID */}
             {job.status === 'completed' && libIds.length > 0 && (
-              <div className="flex items-center gap-2 rounded-lg px-3 py-2 text-xs" style={{ background: 'rgba(16,185,129,0.1)', color: '#6ee7b7' }}>
+              <div
+                className="flex items-center gap-2 rounded-lg px-3 py-2 text-xs"
+                style={{
+                  background: 'var(--accent-emerald-bg)',
+                  border: '1px solid var(--accent-emerald-border)',
+                  color: 'var(--accent-emerald-text)',
+                }}
+              >
                 <CheckCircle2 size={14} className="flex-shrink-0" />
                 <span>已建库（{libIds.length} 个），扫描已自动开始，可在媒体库列表查看进度。</span>
               </div>
@@ -486,7 +536,11 @@ export default function LazyIngestModal({ isOpen, onClose, onCompleted }: Props)
                       onClick={handleRollback}
                       disabled={rollingBack}
                       className="flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm transition-colors disabled:opacity-50"
-                      style={{ background: 'rgba(251,191,36,0.10)', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.4)' }}
+                      style={{
+                        background: 'var(--accent-amber-bg)',
+                        color: 'var(--accent-amber-text)',
+                        border: '1px solid var(--accent-amber-border)',
+                      }}
                       title="按 journal 倒序还原文件位置"
                     >
                       {rollingBack ? <Loader2 size={14} className="animate-spin" /> : <Undo2 size={14} />}
@@ -517,7 +571,7 @@ export default function LazyIngestModal({ isOpen, onClose, onCompleted }: Props)
             style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-default)' }}
           >
             <div className="mb-3 flex items-center gap-2">
-              <ShieldAlert size={18} style={{ color: '#fbbf24' }} />
+              <ShieldAlert size={18} style={{ color: 'var(--accent-amber-text)' }} />
               <h3 className="font-display text-base font-semibold">该源目录已入库过</h3>
             </div>
             <p className="mb-3 text-xs" style={{ color: 'var(--text-secondary)' }}>
@@ -541,7 +595,11 @@ export default function LazyIngestModal({ isOpen, onClose, onCompleted }: Props)
               <button
                 onClick={() => { setDupConflict(null); handleSubmit(true) }}
                 className="rounded-lg px-3 py-1.5 text-xs font-medium transition-colors"
-                style={{ background: 'rgba(244,63,94,0.15)', color: '#fca5a5', border: '1px solid rgba(244,63,94,0.4)' }}
+                style={{
+                  background: 'var(--accent-rose-bg-strong)',
+                  color: 'var(--accent-rose-text)',
+                  border: '1px solid var(--accent-rose-border)',
+                }}
               >
                 强制重新入库
               </button>
@@ -555,7 +613,11 @@ export default function LazyIngestModal({ isOpen, onClose, onCompleted }: Props)
 
 function StatCell({ label, value, accent }: { label: string; value: number; accent?: 'emerald' | 'amber' }) {
   const color =
-    accent === 'emerald' ? '#34d399' : accent === 'amber' ? '#fbbf24' : 'var(--text-primary)'
+    accent === 'emerald'
+      ? 'var(--accent-emerald-text)'
+      : accent === 'amber'
+      ? 'var(--accent-amber-text)'
+      : 'var(--text-primary)'
   return (
     <div className="rounded-lg px-3 py-2 text-center" style={{ background: 'var(--bg-base)' }}>
       <div className="text-lg font-semibold tabular-nums" style={{ color }}>

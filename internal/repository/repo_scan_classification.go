@@ -75,6 +75,30 @@ func (r *ScanClassificationRepo) MarkFailed(mediaID, errMsg string) error {
 		}).Error
 }
 
+// MarkPendingCancelled 把指定范围内仍处于 pending/running 状态的分类记录
+// 批量标记为 failed，并写入 [cancelled] 备注。
+//
+// libraryID 为空 → 影响全部；非空 → 仅影响该库。
+// 返回受影响行数。
+func (r *ScanClassificationRepo) MarkPendingCancelled(libraryID string) (int64, error) {
+	now := time.Now()
+	q := r.db.Model(&model.MediaClassification{}).
+		Where("status IN ?", []string{
+			model.ClassificationStatusPending,
+			model.ClassificationStatusRunning,
+		})
+	if libraryID != "" {
+		q = q.Where("library_id = ?", libraryID)
+	}
+	res := q.Updates(map[string]interface{}{
+		"status":       model.ClassificationStatusFailed,
+		"error_msg":    "[cancelled] " + now.Format(time.RFC3339),
+		"processed_at": &now,
+		"updated_at":   now,
+	})
+	return res.RowsAffected, res.Error
+}
+
 // FindByMediaID 按 MediaID 查询单条
 func (r *ScanClassificationRepo) FindByMediaID(mediaID string) (*model.MediaClassification, error) {
 	var c model.MediaClassification

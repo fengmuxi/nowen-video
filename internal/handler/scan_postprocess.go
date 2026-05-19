@@ -199,3 +199,20 @@ func (h *ScanPostProcessHandler) Stats(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{"data": stats})
 }
+
+// Cancel POST /api/admin/scan-classify/cancel
+//
+// 停止当前进行中的扫描归类：drain 队列 + 把 pending/running 的分类记录回写为 failed。
+// 可选 query 参数 library_id 仅限定某个媒体库。
+//
+// 返回结构：{ drained: 队列丢弃数, marked: DB回写条数, still_running: 是否还有 1 条收尾 }
+func (h *ScanPostProcessHandler) Cancel(c *gin.Context) {
+	libraryID := c.Query("library_id")
+	res, err := h.svc.Cancel(libraryID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	h.logger.Infof("扫描归类已停止 library_id=%s drained=%d marked=%d", libraryID, res.Drained, res.Marked)
+	c.JSON(http.StatusOK, gin.H{"data": res})
+}

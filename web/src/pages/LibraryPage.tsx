@@ -734,7 +734,7 @@ function SeriesCard({ series }: { series: Series }) {
           </div>
         )}
         {/* 集数标签 */}
-        <div className="badge-neon absolute bottom-2 right-2">
+        <div className="badge-neon-overlay absolute bottom-2 right-2">
           {series.season_count} 季 · {series.episode_count} 集
         </div>
         {/* C 方案：刮削状态徽章（左上角） */}

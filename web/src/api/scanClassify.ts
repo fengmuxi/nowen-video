@@ -137,6 +137,14 @@ export const scanClassifyApi = {
       req,
     ),
 
+  // 停止扫描归类：drain 队列 + 把 pending/running 的记录回写为 failed
+  cancel: (libraryId?: string) =>
+    api.post<{ data: { drained: number; marked: number; still_running: boolean } }>(
+      '/admin/scan-classify/cancel',
+      null,
+      { params: libraryId ? { library_id: libraryId } : {} },
+    ),
+
   correct: (req: CorrectRequest) =>
     api.post<{ data: MediaClassification }>('/admin/scan-classify/correct', req),
 

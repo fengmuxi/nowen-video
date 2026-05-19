@@ -424,15 +424,25 @@ type Favorite struct {
 
 // TranscodeTask 转码任务
 type TranscodeTask struct {
-	ID        string    `json:"id" gorm:"primaryKey;type:text"`
-	MediaID   string    `json:"media_id" gorm:"index;type:text;not null"`
-	Status    string    `json:"status" gorm:"type:text;default:pending"` // pending / running / done / failed
-	Quality   string    `json:"quality" gorm:"type:text"`                // 720p / 1080p / 4k
-	Progress  float64   `json:"progress"`                                // 0-100
-	OutputDir string    `json:"output_dir" gorm:"type:text"`
-	Error     string    `json:"error" gorm:"type:text"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID         string  `json:"id" gorm:"primaryKey;type:text"`
+	MediaID    string  `json:"media_id" gorm:"index;type:text;not null"`
+	Status     string  `json:"status" gorm:"type:text;default:pending"` // pending / running / done / failed / cancelled
+	Quality    string  `json:"quality" gorm:"type:text"`                // 720p / 1080p / 4k
+	Progress   float64 `json:"progress"`                                // 0-100
+	OutputDir  string  `json:"output_dir" gorm:"type:text"`
+	Error      string  `json:"error" gorm:"type:text"`
+	MediaTitle string  `json:"media_title" gorm:"type:text"` // 媒体标题（冗余，方便列表展示）
+	Priority   int     `json:"priority" gorm:"default:0"`    // 优先级（保留字段，当前转码服务为按需触发）
+	Retries    int     `json:"retries" gorm:"default:0"`     // 已重试次数
+	MaxRetry   int     `json:"max_retry" gorm:"default:0"`   // 最大重试次数（0=不自动重试）
+	// 时间字段
+	StartedAt   *time.Time `json:"started_at,omitempty"`
+	CompletedAt *time.Time `json:"completed_at,omitempty"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
+
+	// 关联（仅查询时按需 Preload）
+	Media Media `json:"media,omitempty" gorm:"foreignKey:MediaID"`
 }
 
 // BeforeCreate 自动生成UUID
@@ -559,28 +569,8 @@ func (c *Comment) BeforeCreate(tx *gorm.DB) error {
 	return nil
 }
 
-// ScheduledTask 定时任务
-type ScheduledTask struct {
-	ID        string     `json:"id" gorm:"primaryKey;type:text"`
-	Name      string     `json:"name" gorm:"type:text;not null"`     // 任务名称
-	Type      string     `json:"type" gorm:"type:text;not null"`     // scan, scrape, cleanup
-	Schedule  string     `json:"schedule" gorm:"type:text;not null"` // 调度表达式，仅支持：@daily / @weekly / @every 6h（不支持标准cron）
-	TargetID  string     `json:"target_id" gorm:"type:text"`         // 目标ID（如媒体库ID）
-	Enabled   bool       `json:"enabled" gorm:"default:true"`
-	LastRun   *time.Time `json:"last_run"`
-	NextRun   *time.Time `json:"next_run"`
-	Status    string     `json:"status" gorm:"type:text;default:idle"` // idle, running, error
-	LastError string     `json:"last_error" gorm:"type:text"`
-	CreatedAt time.Time  `json:"created_at"`
-	UpdatedAt time.Time  `json:"updated_at"`
-}
-
-func (s *ScheduledTask) BeforeCreate(tx *gorm.DB) error {
-	if s.ID == "" {
-		s.ID = uuid.New().String()
-	}
-	return nil
-}
+// ScheduledTask 已下线（原为定时任务调度器的持久化记录）
+// 表 scheduled_tasks 在老数据库中可能仍存在，不会影响运行。如需彻底清理，手动 DROP TABLE scheduled_tasks 即可。
 
 // ContentRating 内容分级
 type ContentRating struct {
@@ -804,7 +794,6 @@ func AutoMigrate(db *gorm.DB) error {
 		&PlaylistItem{},
 		&Bookmark{},
 		&Comment{},
-		&ScheduledTask{},
 		&ContentRating{},
 		&UserPermission{},
 		&PlaybackStats{},

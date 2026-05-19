@@ -30,7 +30,6 @@ import {
   BarChart3,
   FolderOpen as FolderOpenIcon,
   Activity,
-  Subtitles,
   Library as LibraryIcon,
 } from 'lucide-react'
 import clsx from 'clsx'
@@ -304,15 +303,6 @@ export default function Sidebar({ isMobileOpen = false, onMobileClose }: Sidebar
             >
               <Zap size={18} />
               {(!collapsed || isMobileOpen) && <span>预处理</span>}
-            </NavLink>
-
-            <NavLink
-              to="/subtitle-preprocess"
-              className={({ isActive }) => clsx('nav-item', isActive && 'active')}
-              onClick={onMobileClose}
-            >
-              <Subtitles size={18} />
-              {(!collapsed || isMobileOpen) && <span>字幕预处理</span>}
             </NavLink>
           </>
         )}

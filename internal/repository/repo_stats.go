@@ -58,6 +58,73 @@ func (r *TranscodeRepo) DeleteByID(id string) error {
 	return r.db.Delete(&model.TranscodeTask{}, "id = ?", id).Error
 }
 
+// DeleteByIDs 批量删除任务记录（不删除 running 中的）
+func (r *TranscodeRepo) DeleteByIDs(ids []string) (int64, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	res := r.db.Where("id IN ? AND status NOT IN ?", ids, []string{"running", "pending"}).
+		Delete(&model.TranscodeTask{})
+	return res.RowsAffected, res.Error
+}
+
+// FindByID 按 ID 查询任务
+func (r *TranscodeRepo) FindByID(id string) (*model.TranscodeTask, error) {
+	var task model.TranscodeTask
+	err := r.db.Where("id = ?", id).First(&task).Error
+	if err != nil {
+		return nil, err
+	}
+	return &task, nil
+}
+
+// ListAll 分页查询所有任务，按 updated_at 倒序，可按状态过滤
+// 同时 Preload 关联的 Media，方便展示标题等信息
+func (r *TranscodeRepo) ListAll(page, pageSize int, status string) ([]model.TranscodeTask, int64, error) {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 20
+	}
+	q := r.db.Model(&model.TranscodeTask{})
+	if status != "" {
+		q = q.Where("status = ?", status)
+	}
+	var total int64
+	if err := q.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	var tasks []model.TranscodeTask
+	err := q.Preload("Media").
+		Order("updated_at DESC").
+		Offset((page - 1) * pageSize).
+		Limit(pageSize).
+		Find(&tasks).Error
+	return tasks, total, err
+}
+
+// CountByStatus 按状态分组统计任务数（用于面板顶部统计卡片）
+func (r *TranscodeRepo) CountByStatus() (map[string]int64, error) {
+	type row struct {
+		Status string
+		Cnt    int64
+	}
+	var rows []row
+	err := r.db.Model(&model.TranscodeTask{}).
+		Select("status, count(*) as cnt").
+		Group("status").
+		Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[string]int64, len(rows))
+	for _, r := range rows {
+		result[r.Status] = r.Cnt
+	}
+	return result, nil
+}
+
 // ==================== PlaybackStatsRepo ====================
 
 type PlaybackStatsRepo struct {

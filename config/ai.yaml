@@ -1,5 +1,5 @@
 api_base: https://dashscope.aliyuncs.com/compatible-mode/v1
-api_key: ENC:j6Sz3NQ//+wLXPxCoYdgjwcwB+b1X5XWGeEWvYBYSR/0oUHvuWkqDgQW6I3CJaByAh7gzWvTa9h34UEAPkaE
+api_key: ENC:36FhybZBHsStukPKi4IfSi3DwG10vyRRv43s5OegwC/Gdotvx0yomxR9OrWpPr7jaujuzNlV9kEyCi/igpsg
 auto_pilot: true
 auto_subtitle_preprocess: false
 block_local_ai: true
@@ -16,7 +16,7 @@ failover:
     enabled: false
     last_switched_at: 0
 max_concurrent: 1
-model: qwen-turbo
+model: deepseek-v3.1
 monthly_budget: 0
 monthly_token_budget: 0
 ocr_dpi: 150
@@ -26,9 +26,9 @@ prefer_local_whisper: false
 profiles:
     qwen:
         api_base: https://dashscope.aliyuncs.com/compatible-mode/v1
-        api_key: ENC:gDPjGFSn6Wiy/bnj3Vd/h/vjCTgnFtvHF+0Rdp4/zrNSwKVBG233C+5tH24PCCAw3iymW/RNcTIvuMsT+4pF
-        enabled: false
-        model: qwen-turbo
+        api_key: ENC:QGHlm1rlX4kADtsihowvMY3ohnzd98U5OjQmKmpI54zHznYLMs94WPwVteV8cACqbpn9iNaBNiGk0hPvO0A0
+        enabled: true
+        model: deepseek-v3.1
 provider: qwen
 request_interval_ms: 1100
 sub_clean_backup: true

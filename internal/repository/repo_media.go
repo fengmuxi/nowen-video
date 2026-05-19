@@ -497,6 +497,24 @@ func (r *MediaRepo) CountByScrapeStatus(libraryID, folderPath string) (map[strin
 	return result, nil
 }
 
+// RepairScrapeStatusForCompleted 幂等修复存量数据：
+// 对那些 overview 与 poster_path 均已齐全、但 scrape_status 仍处于 pending / 空 的 media 行，
+// 直接置为 scraped。常见于剧集（episode）通过 syncSeriesToEpisodes 补齐元数据但
+// 历史版本未回写状态字段的场景。
+//
+// 不影响 manual / failed / partial / scraped 行；不影响仍缺字段的行；可重复调用。
+// 返回修复的行数（用于日志）。
+func (r *MediaRepo) RepairScrapeStatusForCompleted() (int64, error) {
+	res := r.db.Model(&model.Media{}).
+		Where("(scrape_status IS NULL OR scrape_status = '' OR scrape_status = 'pending')").
+		Where("overview IS NOT NULL AND TRIM(overview) <> ''").
+		Where("poster_path IS NOT NULL AND TRIM(poster_path) <> ''").
+		Updates(map[string]interface{}{
+			"scrape_status": "scraped",
+		})
+	return res.RowsAffected, res.Error
+}
+
 // CountByScopeAndType 在指定作用域下按媒体类型计数（movie/episode 等）
 func (r *MediaRepo) CountByScopeAndType(libraryID, folderPath, mediaType string) (int64, error) {
 	var count int64

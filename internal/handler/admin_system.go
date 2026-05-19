@@ -11,92 +11,6 @@ import (
 	"github.com/nowen-video/nowen-video/internal/model"
 )
 
-// ==================== 定时任务管理 ====================
-
-// CreateScheduledTaskRequest 创建定时任务请求
-type CreateScheduledTaskRequest struct {
-	Name     string `json:"name" binding:"required"`
-	Type     string `json:"type" binding:"required"`     // scan, scrape, cleanup
-	Schedule string `json:"schedule" binding:"required"` // @daily, @every 6h等
-	TargetID string `json:"target_id"`
-}
-
-// ListScheduledTasks 获取定时任务列表
-func (h *AdminHandler) ListScheduledTasks(c *gin.Context) {
-	tasks, err := h.schedulerService.ListTasks()
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "获取任务列表失败"})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"data": tasks})
-}
-
-// CreateScheduledTask 创建定时任务
-func (h *AdminHandler) CreateScheduledTask(c *gin.Context) {
-	var req CreateScheduledTaskRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数无效"})
-		return
-	}
-
-	task, err := h.schedulerService.CreateTask(req.Name, req.Type, req.Schedule, req.TargetID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "创建任务失败: " + err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusCreated, gin.H{"data": task})
-}
-
-// UpdateScheduledTaskRequest 更新定时任务请求
-type UpdateScheduledTaskRequest struct {
-	Name     string `json:"name" binding:"required"`
-	Schedule string `json:"schedule" binding:"required"`
-	Enabled  bool   `json:"enabled"`
-}
-
-// UpdateScheduledTask 更新定时任务
-func (h *AdminHandler) UpdateScheduledTask(c *gin.Context) {
-	id := c.Param("id")
-
-	var req UpdateScheduledTaskRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数无效"})
-		return
-	}
-
-	if err := h.schedulerService.UpdateTask(id, req.Name, req.Schedule, req.Enabled); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "更新任务失败"})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{"message": "已更新"})
-}
-
-// DeleteScheduledTask 删除定时任务
-func (h *AdminHandler) DeleteScheduledTask(c *gin.Context) {
-	id := c.Param("id")
-
-	if err := h.schedulerService.DeleteTask(id); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "删除任务失败"})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{"message": "已删除"})
-}
-
-// RunScheduledTaskNow 立即执行定时任务
-func (h *AdminHandler) RunScheduledTaskNow(c *gin.Context) {
-	id := c.Param("id")
-
-	if err := h.schedulerService.RunTaskNow(id); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{"message": "任务已开始执行"})
-}
-
 // ==================== 批量操作 ====================
 
 // BatchScanRequest 批量扫描请求
@@ -636,7 +550,6 @@ func (h *AdminHandler) ClearAllData(c *gin.Context) {
 		{name: "刮削历史", model: &model.ScrapeHistory{}},
 		{name: "刮削任务", model: &model.ScrapeTask{}},
 		{name: "转码任务", model: &model.TranscodeTask{}},
-		{name: "定时任务", model: &model.ScheduledTask{}},
 
 		// AI 相关
 		{name: "AI缓存", model: &model.AICacheEntry{}},

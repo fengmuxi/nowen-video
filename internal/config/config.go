@@ -1377,18 +1377,24 @@ func generateRandomSecret(length int) string {
 }
 
 // GetDBDSN 返回 SQLite 连接字符串（含优化参数）
+//
+// 注意：项目使用的是 glebarez/sqlite（基于纯 Go 的 modernc.org/sqlite），
+// 其 DSN 参数语法与 mattn/go-sqlite3 不同——必须使用 _pragma=name(value) 形式，
+// 以前的 _journal_mode=WAL / _busy_timeout=5000 在该驱动下不会生效。
 func (c *Config) GetDBDSN() string {
 	dsn := c.Database.DBPath
 	params := []string{}
 
 	if c.Database.WALMode {
-		params = append(params, "_journal_mode=WAL")
+		params = append(params, "_pragma=journal_mode(WAL)")
+		// WAL 下推荐 NORMAL，性能与持久性折中
+		params = append(params, "_pragma=synchronous(NORMAL)")
 	}
 	if c.Database.BusyTimeout > 0 {
-		params = append(params, fmt.Sprintf("_busy_timeout=%d", c.Database.BusyTimeout))
+		params = append(params, fmt.Sprintf("_pragma=busy_timeout(%d)", c.Database.BusyTimeout))
 	}
 	if c.Database.CacheSize != 0 {
-		params = append(params, fmt.Sprintf("_cache_size=%d", c.Database.CacheSize))
+		params = append(params, fmt.Sprintf("_pragma=cache_size(%d)", c.Database.CacheSize))
 	}
 
 	if len(params) > 0 {

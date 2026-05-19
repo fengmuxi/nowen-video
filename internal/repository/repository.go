@@ -19,7 +19,6 @@ type Repositories struct {
 	Playlist       *PlaylistRepo
 	Bookmark       *BookmarkRepo
 	Comment        *CommentRepo
-	ScheduledTask  *ScheduledTaskRepo
 	ContentRating  *ContentRatingRepo
 	UserPermission *UserPermissionRepo
 	SystemSetting  *SystemSettingRepo
@@ -75,7 +74,6 @@ func NewRepositories(db *gorm.DB) *Repositories {
 		Playlist:       &PlaylistRepo{db: db},
 		Bookmark:       &BookmarkRepo{db: db},
 		Comment:        &CommentRepo{db: db},
-		ScheduledTask:  &ScheduledTaskRepo{db: db},
 		ContentRating:  &ContentRatingRepo{db: db},
 		UserPermission: &UserPermissionRepo{db: db},
 		SystemSetting:  &SystemSettingRepo{db: db},

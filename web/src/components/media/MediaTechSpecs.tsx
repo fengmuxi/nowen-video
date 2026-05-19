@@ -312,146 +312,134 @@ export default function MediaTechSpecs({ media, techSpecs, fileInfo, library, pl
 
   return (
     <section>
-      {/* ==================== 标题栏 ==================== */}
-      <div className="mb-4 flex items-center justify-between">
-        <h3 className="flex items-center gap-2 font-display text-base font-semibold tracking-wide" style={{ color: 'var(--text-primary)' }}>
-          <Cpu size={16} className="text-neon/60" />
+      {/* ==================== 标题栏（紧凑版） ==================== */}
+      <div className="mb-2 flex items-center justify-between">
+        <h3 className="flex items-center gap-1.5 font-display text-sm font-semibold tracking-wide" style={{ color: 'var(--text-primary)' }}>
+          <Cpu size={14} className="text-neon/60" />
           文件信息与技术规格
         </h3>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5">
           {/* 导出按钮 */}
           {isAdmin && (
             <div className="flex items-center gap-1">
               <button
                 onClick={exportJSON}
-                className="flex items-center gap-1 rounded-lg px-2 py-1 text-[10px] font-medium transition-colors hover:text-neon"
+                className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium transition-colors hover:text-neon"
                 style={{ color: 'var(--text-muted)', background: 'var(--nav-hover-bg)' }}
                 title="导出为 JSON"
               >
-                <FileJson size={12} /> JSON
+                <FileJson size={10} /> JSON
               </button>
               <button
                 onClick={exportXML}
-                className="flex items-center gap-1 rounded-lg px-2 py-1 text-[10px] font-medium transition-colors hover:text-neon"
+                className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium transition-colors hover:text-neon"
                 style={{ color: 'var(--text-muted)', background: 'var(--nav-hover-bg)' }}
                 title="导出为 XML"
               >
-                <FileCode size={12} /> XML
+                <FileCode size={10} /> XML
               </button>
             </div>
           )}
+          {/* 展开/收起按钮（移到标题右侧，节省空间） */}
+          <button
+            onClick={() => setExpanded(!expanded)}
+            className="flex items-center gap-1 rounded-md px-2 py-0.5 text-[10px] font-medium transition-all hover:text-neon"
+            style={{ color: 'var(--text-muted)', background: 'var(--nav-hover-bg)' }}
+            title={expanded ? '收起' : '展开详细信息'}
+          >
+            {expanded ? <><ChevronUp size={10} />收起</> : <><ChevronDown size={10} />详情</>}
+          </button>
         </div>
       </div>
 
-      {/* ==================== 四宫格概览卡片（始终可见） ==================== */}
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      {/* ==================== 紧凑的四列概览条（一行展示） ==================== */}
+      <div
+        className="grid grid-cols-2 lg:grid-cols-4 rounded-lg overflow-hidden"
+        style={{ background: 'var(--bg-subtle)', border: '1px solid var(--border-default)' }}
+      >
         {/* 视频概览 */}
-        <div className="glass-panel-subtle rounded-xl p-4">
-          <div className="mb-2 flex items-center gap-2">
-            <div className="flex h-7 w-7 items-center justify-center rounded-lg" style={{ background: 'var(--neon-blue-8)' }}>
-              <Monitor size={14} className="text-neon" />
+        <div className="flex items-center gap-2 px-3 py-2 lg:border-r" style={{ borderColor: 'var(--border-default)' }}>
+          <Monitor size={14} className="text-neon shrink-0" />
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-1 flex-wrap">
+              <span className="text-xs font-semibold truncate" style={{ color: 'var(--text-primary)' }}>
+                {mainVideo
+                  ? `${mainVideo.width && mainVideo.height ? `${mainVideo.height}p ` : ''}${formatCodecName(mainVideo.codec_name)}`
+                  : (media.resolution || media.video_codec || '-')}
+              </span>
+              {mainVideo && isHDR(mainVideo) && (
+                <span className="rounded px-1 py-px text-[9px] font-bold leading-none" style={{ background: 'rgba(234, 179, 8, 0.15)', color: '#FBBF24' }}>{getHDRLabel(mainVideo)}</span>
+              )}
+              {mainVideo?.is_interlaced && (
+                <span className="rounded px-1 py-px text-[9px] font-medium leading-none" style={{ background: 'rgba(239,68,68,0.1)', color: '#ef4444' }}>i</span>
+              )}
             </div>
-            <span className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>视频</span>
-            {mainVideo && isHDR(mainVideo) && (
-              <span className="rounded px-1.5 py-0.5 text-[10px] font-bold" style={{ background: 'rgba(234, 179, 8, 0.15)', color: '#FBBF24' }}>{getHDRLabel(mainVideo)}</span>
-            )}
-            {mainVideo?.is_interlaced && (
-              <span className="rounded px-1.5 py-0.5 text-[10px] font-medium" style={{ background: 'rgba(239,68,68,0.1)', color: '#ef4444' }}>隔行</span>
-            )}
-          </div>
-          <div className="space-y-1">
-            <p className="text-sm font-medium" style={{ color: 'var(--text-secondary)' }}>
-              {mainVideo ? `${mainVideo.width && mainVideo.height ? `${mainVideo.height}p` : ''} ${formatCodecName(mainVideo.codec_name)} ${getHDRLabel(mainVideo)}` : (media.resolution || '-')}
-            </p>
-            <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+            <div className="text-[10px] truncate" style={{ color: 'var(--text-muted)' }}>
               {mainVideo ? [
                 mainVideo.width && mainVideo.height ? `${mainVideo.width}×${mainVideo.height}` : null,
-                mainVideo.frame_rate ? `${parseFloat(mainVideo.frame_rate).toFixed(2)} fps` : null,
+                mainVideo.frame_rate ? `${parseFloat(mainVideo.frame_rate).toFixed(0)}fps` : null,
                 mainVideo.bit_rate ? formatBitRate(mainVideo.bit_rate) : null,
-              ].filter(Boolean).join(' · ') : (media.video_codec || '无视频流')}
-            </p>
+              ].filter(Boolean).join(' · ') : '无视频流'}
+            </div>
           </div>
         </div>
 
         {/* 音频概览 */}
-        <div className="glass-panel-subtle rounded-xl p-4">
-          <div className="mb-2 flex items-center gap-2">
-            <div className="flex h-7 w-7 items-center justify-center rounded-lg" style={{ background: 'var(--neon-purple-8)' }}>
-              <Music size={14} className="text-purple-400" />
-            </div>
-            <span className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>音频</span>
-            {audioStreams.length > 1 && (
-              <span className="rounded px-1.5 py-0.5 text-[10px] font-medium" style={{ background: 'var(--neon-purple-8)', color: 'var(--text-secondary)' }}>
-                {audioStreams.length} 轨
+        <div className="flex items-center gap-2 px-3 py-2 lg:border-r" style={{ borderColor: 'var(--border-default)' }}>
+          <Music size={14} className="text-purple-400 shrink-0" />
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-1 flex-wrap">
+              <span className="text-xs font-semibold truncate" style={{ color: 'var(--text-primary)' }}>
+                {mainAudio
+                  ? `${formatCodecName(mainAudio.codec_name)} ${formatChannels(mainAudio.channels, mainAudio.channel_layout)}`
+                  : (media.audio_codec || '-')}
               </span>
-            )}
-          </div>
-          <div className="space-y-1">
-            <p className="text-sm font-medium" style={{ color: 'var(--text-secondary)' }}>
-              {mainAudio ? `${formatCodecName(mainAudio.codec_name)} ${formatChannels(mainAudio.channels, mainAudio.channel_layout)}` : (media.audio_codec || '-')}
-            </p>
-            <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+              {audioStreams.length > 1 && (
+                <span className="rounded px-1 py-px text-[9px] font-medium leading-none" style={{ background: 'var(--neon-purple-8)', color: 'var(--text-secondary)' }}>×{audioStreams.length}</span>
+              )}
+            </div>
+            <div className="text-[10px] truncate" style={{ color: 'var(--text-muted)' }}>
               {mainAudio ? [
                 mainAudio.sample_rate ? formatSampleRate(mainAudio.sample_rate) : null,
                 mainAudio.bit_rate ? formatBitRate(mainAudio.bit_rate) : null,
                 mainAudio.language ? formatLanguage(mainAudio.language) : null,
-              ].filter(Boolean).join(' · ') : '无音频流'}
-            </p>
+              ].filter(Boolean).join(' · ') : '无音频'}
+            </div>
           </div>
         </div>
 
         {/* 字幕概览 */}
-        <div className="glass-panel-subtle rounded-xl p-4">
-          <div className="mb-2 flex items-center gap-2">
-            <div className="flex h-7 w-7 items-center justify-center rounded-lg" style={{ background: 'rgba(0, 255, 136, 0.08)' }}>
-              <Subtitles size={14} style={{ color: 'var(--neon-green)' }} />
+        <div className="flex items-center gap-2 px-3 py-2 lg:border-r" style={{ borderColor: 'var(--border-default)' }}>
+          <Subtitles size={14} className="shrink-0" style={{ color: 'var(--neon-green)' }} />
+          <div className="min-w-0 flex-1">
+            <div className="text-xs font-semibold truncate" style={{ color: 'var(--text-primary)' }}>
+              {subtitleStreams.length > 0 ? `内嵌 ${subtitleStreams.length} 条` : '无内嵌字幕'}
             </div>
-            <span className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>字幕</span>
-          </div>
-          <div className="space-y-1">
-            <p className="text-sm font-medium" style={{ color: 'var(--text-secondary)' }}>
-              {subtitleStreams.length > 0 ? `${subtitleStreams.length} 条内嵌字幕` : '无内嵌字幕'}
-            </p>
-            <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+            <div className="text-[10px] truncate" style={{ color: 'var(--text-muted)' }}>
               {subtitleStreams.length > 0
                 ? subtitleStreams.map(s => formatLanguage(s.language)).filter((v, i, a) => a.indexOf(v) === i).join(' / ')
                 : '-'
               }
-            </p>
+            </div>
           </div>
         </div>
 
         {/* 容器/文件概览 */}
-        <div className="glass-panel-subtle rounded-xl p-4">
-          <div className="mb-2 flex items-center gap-2">
-            <div className="flex h-7 w-7 items-center justify-center rounded-lg" style={{ background: 'rgba(255, 165, 0, 0.08)' }}>
-              <HardDrive size={14} style={{ color: '#FFA500' }} />
-            </div>
-            <span className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>容器</span>
-          </div>
-          <div className="space-y-1">
-            <p className="text-sm font-medium" style={{ color: 'var(--text-secondary)' }}>
+        <div className="flex items-center gap-2 px-3 py-2">
+          <HardDrive size={14} className="shrink-0" style={{ color: '#FFA500' }} />
+          <div className="min-w-0 flex-1">
+            <div className="text-xs font-semibold truncate" style={{ color: 'var(--text-primary)' }}>
               {techSpecs?.format ? formatContainerName(techSpecs.format.format_name) : fileInfo?.file_ext?.toUpperCase() || '-'}
-            </p>
-            <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+            </div>
+            <div className="text-[10px] truncate" style={{ color: 'var(--text-muted)' }}>
               {techSpecs?.format ? [
-                techSpecs.format.bit_rate ? `总码率 ${formatBitRate(techSpecs.format.bit_rate)}` : null,
-                techSpecs.format.stream_count ? `${techSpecs.format.stream_count} 个流` : null,
+                techSpecs.format.bit_rate ? formatBitRate(techSpecs.format.bit_rate) : null,
+                techSpecs.format.stream_count ? `${techSpecs.format.stream_count}流` : null,
+                formatSize(media.file_size),
               ].filter(Boolean).join(' · ') : formatSize(media.file_size)}
-            </p>
+            </div>
           </div>
         </div>
-      </div>
-
-      {/* ==================== 展开/收起按钮 ==================== */}
-      <div className="mt-3 flex justify-center">
-        <button
-          onClick={() => setExpanded(!expanded)}
-          className="flex items-center gap-1.5 rounded-full px-4 py-1.5 text-xs font-medium transition-all hover:text-neon"
-          style={{ color: 'var(--text-muted)', background: 'var(--nav-hover-bg)' }}
-        >
-          {expanded ? <><ChevronUp size={14} />收起详细信息</> : <><ChevronDown size={14} />展开详细信息</>}
-        </button>
       </div>
 
       {/* ==================== 展开的详细信息（标签页形式） ==================== */}

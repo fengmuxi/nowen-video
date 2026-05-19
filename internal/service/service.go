@@ -27,7 +27,6 @@ type Services struct {
 	Bookmark       *BookmarkService
 	Comment        *CommentService
 	Permission     *PermissionService
-	Scheduler      *SchedulerService
 	FileWatcher    *FileWatcherService
 	NFO            *NFOService
 	Stats          *StatsService
@@ -110,13 +109,6 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, logger *zap
 	// 创建Library服务
 	libService := NewLibraryService(repos.Library, repos.Media, repos.Series, repos.Favorite, repos.WatchHistory, repos.MediaPerson, repos.ScanClassification, cfg, scanner, metadata, logger)
 	libService.SetWSHub(wsHub)
-
-	// 创建调度器服务
-	scheduler := NewSchedulerService(repos.ScheduledTask, repos.Library, logger)
-	scheduler.SetLibraryService(libService)
-	scheduler.SetTranscodeService(transcoder) // 注入转码服务，用于 cleanup 任务
-	scheduler.SetWSHub(wsHub)
-	scheduler.Start()
 
 	// 创建文件监听服务
 	fileWatcher := NewFileWatcherService(cfg, logger, repos.Library, repos.Media, repos.Series, scanner, metadata)
@@ -305,7 +297,6 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, logger *zap
 		Bookmark:       NewBookmarkService(repos.Bookmark, repos.Media, logger),
 		Comment:        NewCommentService(repos.Comment, repos.Media, logger),
 		Permission:     NewPermissionService(repos.UserPermission, repos.ContentRating, repos.WatchHistory, logger),
-		Scheduler:      scheduler,
 		FileWatcher:    fileWatcher,
 		NFO:            nfoService,
 		Stats:          statsService,
@@ -428,9 +419,6 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, logger *zap
 	svcs.Stream.SetVFSManager(vfsManager)
 	preprocessService.SetVFSManager(vfsManager)
 	nfoService.SetVFSManager(vfsManager)
-
-	// 延迟注入：SchedulerService 需要 SubtitlePreprocessService（用于定时字幕预处理）
-	scheduler.SetSubtitlePreprocessService(subtitlePreprocessService, cfg.AI.SubtitleTargetLangs)
 
 	// 延迟注入：扫描完成后自动触发预处理（受系统设置控制）
 	scanner.SetOnScanComplete(func(libraryID string) {

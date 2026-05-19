@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { adminApi, libraryApi } from '@/api'
 import { useWebSocket, WS_EVENTS } from '@/hooks/useWebSocket'
-import type { SystemInfo, Library, User, TranscodeJob, TMDbConfigStatus, DoubanConfigStatus, DoubanImportTokenInfo, DoubanImportTokenStatus, SystemSettings } from '@/types'
+import type { SystemInfo, Library, User, TMDbConfigStatus, DoubanConfigStatus, DoubanImportTokenInfo, DoubanImportTokenStatus, SystemSettings } from '@/types'
 import type { ScanProgressData, ScrapeProgressData, TranscodeProgressData, ScanPhaseData } from '@/hooks/useWebSocket'
 import {
   Server,
@@ -19,7 +19,6 @@ import {
   WifiOff,
   LayoutDashboard,
   FolderOpen,
-  ListTodo,
   Activity,
   Search,
   ChevronRight,
@@ -41,7 +40,6 @@ import LibraryManager from '@/components/LibraryManager'
 import LogsTab from '@/components/admin/LogsTab'
 import DashboardTab from '@/components/admin/DashboardTab'
 import UsersTab from '@/components/admin/UsersTab'
-import TasksTab from '@/components/admin/TasksTab'
 import AITab from '@/components/admin/AITab'
 import StorageTab from '@/components/admin/StorageTab'
 import ClassificationTab from '@/components/admin/ClassificationTab'
@@ -55,7 +53,6 @@ const TABS = [
   { id: 'dashboard', labelKey: 'admin.tabDashboard', icon: LayoutDashboard, shortLabelKey: 'admin.shortDashboard' },
   { id: 'library', labelKey: 'admin.tabLibrary', icon: FolderOpen, shortLabelKey: 'admin.shortLibrary' },
   { id: 'users', labelKey: 'admin.tabUsers', icon: Users, shortLabelKey: 'admin.shortUsers' },
-  { id: 'tasks', labelKey: 'admin.tabTasks', icon: ListTodo, shortLabelKey: 'admin.shortTasks' },
   { id: 'logs', labelKey: 'admin.tabLogs', icon: FileText, shortLabelKey: 'admin.shortLogs' },
   { id: 'ai', labelKey: 'admin.tabAI', icon: Sparkles, shortLabelKey: 'admin.shortAI' },
   { id: 'classify', labelKey: 'admin.tabClassify', icon: Layers, shortLabelKey: 'admin.shortClassify' },
@@ -69,13 +66,11 @@ function TabScrollNav({
   activeTab,
   switchTab,
   hasActiveProgress,
-  transcodeJobs,
   t,
 }: {
   activeTab: TabId
   switchTab: (tab: TabId) => void
   hasActiveProgress: boolean
-  transcodeJobs: TranscodeJob[]
   t: (key: string) => string
 }) {
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -164,9 +159,8 @@ function TabScrollNav({
         {TABS.map((tab) => {
           const Icon = tab.icon
           const isActive = activeTab === tab.id
-          // 给「任务」标签添加活动指示器
-          const hasIndicator = tab.id === 'tasks' && (hasActiveProgress || transcodeJobs.some((j) => j.status === 'running'))
           // 给「仪表盘」标签在有进度时添加指示器
+          const hasIndicator = false
           const hasDashIndicator = tab.id === 'dashboard' && hasActiveProgress
 
           return (
@@ -223,7 +217,6 @@ export default function AdminPage() {
   const [systemInfo, setSystemInfo] = useState<SystemInfo | null>(null)
   const [libraries, setLibraries] = useState<Library[]>([])
   const [users, setUsers] = useState<User[]>([])
-  const [transcodeJobs, setTranscodeJobs] = useState<TranscodeJob[]>([])
   const [scanning, setScanning] = useState<Set<string>>(new Set())
 
   // 系统全局设置
@@ -415,11 +408,10 @@ export default function AdminPage() {
   useEffect(() => {
     const loadAll = async () => {
       try {
-        const [sysRes, libRes, userRes, transRes, tmdbRes, doubanRes, settingsRes] = await Promise.all([
+        const [sysRes, libRes, userRes, tmdbRes, doubanRes, settingsRes] = await Promise.all([
           adminApi.systemInfo(),
           libraryApi.list(),
           adminApi.listUsers(),
-          adminApi.transcodeStatus(),
           adminApi.getTMDbConfig(),
           adminApi.getDoubanConfig(),
           adminApi.getSystemSettings(),
@@ -427,7 +419,6 @@ export default function AdminPage() {
         setSystemInfo(sysRes.data.data)
         setLibraries(libRes.data.data || [])
         setUsers(userRes.data.data || [])
-        setTranscodeJobs(transRes.data.data || [])
         setTmdbConfig(tmdbRes.data.data)
         setDoubanConfig(doubanRes.data.data)
         if (settingsRes.data.data) setSysSettings(settingsRes.data.data)
@@ -699,7 +690,7 @@ export default function AdminPage() {
       { label: t('admin.quickNavLibrary'), tab: 'library' as TabId, icon: FolderOpen },
       { label: t('admin.quickNavTMDb'), tab: 'library' as TabId, icon: Film },
       { label: t('admin.quickNavUsers'), tab: 'users' as TabId, icon: Users },
-      { label: t('admin.quickNavTranscode'), tab: 'tasks' as TabId, icon: Zap },
+      { label: t('admin.quickNavTranscode'), tab: 'tasks' as TabId, icon: Zap, href: '/preprocess#transcode' },
       { label: t('admin.quickNavLogs'), tab: 'logs' as TabId, icon: FileText },
       { label: t('admin.quickNavAI'), tab: 'ai' as TabId, icon: Sparkles },
     ]
@@ -746,7 +737,11 @@ export default function AdminPage() {
                       <button
                         key={item.label}
                         onClick={() => {
-                          switchTab(item.tab)
+                          if ('href' in item && item.href) {
+                            window.location.href = item.href
+                          } else {
+                            switchTab(item.tab)
+                          }
                           setSearchQuery('')
                         }}
                         className="flex w-full items-center gap-2.5 px-4 py-2.5 text-left text-sm transition-colors hover:bg-[var(--nav-hover-bg)]"
@@ -783,7 +778,6 @@ export default function AdminPage() {
           activeTab={activeTab}
           switchTab={switchTab}
           hasActiveProgress={hasActiveProgress}
-          transcodeJobs={transcodeJobs}
           t={t}
         />
       </div>
@@ -1204,14 +1198,6 @@ export default function AdminPage() {
         {/* ===== 用户管理标签页 ===== */}
         {activeTab === 'users' && (
           <UsersTab users={users} setUsers={setUsers} />
-        )}
-
-        {/* ===== 任务与转码标签页 ===== */}
-        {activeTab === 'tasks' && (
-          <TasksTab
-            transcodeJobs={transcodeJobs}
-            transcodeProgress={transcodeProgress}
-          />
         )}
 
         {/* ===== 日志标签页 ===== */}

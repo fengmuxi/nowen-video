@@ -5,42 +5,6 @@ import (
 	"gorm.io/gorm"
 )
 
-// ==================== ScheduledTaskRepo ====================
-
-type ScheduledTaskRepo struct {
-	db *gorm.DB
-}
-
-func (r *ScheduledTaskRepo) Create(task *model.ScheduledTask) error {
-	return r.db.Create(task).Error
-}
-
-func (r *ScheduledTaskRepo) FindByID(id string) (*model.ScheduledTask, error) {
-	var task model.ScheduledTask
-	err := r.db.First(&task, "id = ?", id).Error
-	return &task, err
-}
-
-func (r *ScheduledTaskRepo) List() ([]model.ScheduledTask, error) {
-	var tasks []model.ScheduledTask
-	err := r.db.Order("created_at DESC").Find(&tasks).Error
-	return tasks, err
-}
-
-func (r *ScheduledTaskRepo) Update(task *model.ScheduledTask) error {
-	return r.db.Save(task).Error
-}
-
-func (r *ScheduledTaskRepo) Delete(id string) error {
-	return r.db.Delete(&model.ScheduledTask{}, "id = ?", id).Error
-}
-
-func (r *ScheduledTaskRepo) ListEnabled() ([]model.ScheduledTask, error) {
-	var tasks []model.ScheduledTask
-	err := r.db.Where("enabled = ?", true).Find(&tasks).Error
-	return tasks, err
-}
-
 // ==================== ContentRatingRepo ====================
 
 type ContentRatingRepo struct {

@@ -692,7 +692,7 @@ export default function DashboardTab({
               <ul className="list-disc pl-4 space-y-0.5">
                 <li>观看历史、收藏、播放列表、书签、评论</li>
                 <li>播放统计、演员信息、类型标签、内容分级</li>
-                <li>刮削任务/历史、转码任务、定时任务</li>
+                <li>刮削任务/历史、转码任务</li>
                 <li>AI缓存、推荐缓存、AI分析数据</li>
                 <li>家庭社交、直播、同步、分享链接等数据</li>
                 <li><strong>所有媒体和剧集记录</strong>（包括元数据、海报、封面路径等）</li>

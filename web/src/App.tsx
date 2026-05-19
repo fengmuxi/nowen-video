@@ -27,6 +27,7 @@ const FileManagerPage = lazy(() => import('@/pages/FileManagerPage'))
 const PulsePage = lazy(() => import('@/pages/PulsePage'))
 const PreprocessPage = lazy(() => import('@/pages/PreprocessPage'))
 const SubtitlePreprocessPage = lazy(() => import('@/pages/SubtitlePreprocessPage'))
+const PreprocessLayout = lazy(() => import('@/pages/PreprocessLayout'))
 const BrowsePage = lazy(() => import('@/pages/BrowsePage'))
 const PersonDetailPage = lazy(() => import('@/pages/PersonDetailPage'))
 const CollectionsPage = lazy(() => import('@/pages/CollectionsPage'))
@@ -148,8 +149,12 @@ export default function App() {
               <Route path="profile" element={<ProfilePage />} />
               <Route path="stats" element={<StatsPage />} />
               <Route path="pulse" element={<PulsePage />} />
-              <Route path="preprocess" element={<PreprocessPage />} />
-              <Route path="subtitle-preprocess" element={<SubtitlePreprocessPage />} />
+              <Route path="preprocess" element={<PreprocessLayout />}>
+                <Route index element={<PreprocessPage />} />
+                <Route path="subtitle" element={<SubtitlePreprocessPage />} />
+              </Route>
+              {/* 兼容旧侧栏入口 /subtitle-preprocess —— 重定向到新地址 */}
+              <Route path="subtitle-preprocess" element={<Navigate to="/preprocess/subtitle" replace />} />
               <Route path="browse" element={<BrowsePage />} />
               <Route path="collections" element={<CollectionsPage />} />
               <Route path="collections/:id" element={<CollectionDetailPage />} />

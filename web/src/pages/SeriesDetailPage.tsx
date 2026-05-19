@@ -8,6 +8,8 @@ import { CastGrid } from '@/components/media'
 import Pagination from '@/components/Pagination'
 import { usePagination } from '@/hooks/usePagination'
 import { formatErrMsg } from '@/utils/error'
+import { parseDirectMatchId } from '@/utils/parseDirectMatchId'
+import { invalidateMediaListCaches } from '@/utils/invalidateMediaCaches'
 import type { Series, SeasonInfo, Media, Playlist, WatchHistory, MediaPerson } from '@/types'
 import {
   Play,
@@ -168,6 +170,22 @@ export default function SeriesDetailPage() {
 
   const handleMatchSearch = async () => {
     if (!matchQuery.trim()) return
+    // 优先尝试直输 ID / URL 解析（支持 https://www.themoviedb.org/movie/128881-3、128881、128881-3 等）
+    const direct = parseDirectMatchId(matchQuery, matchSource)
+    if (direct) {
+      const sourceLabel = { tmdb: 'TMDb', douban: '豆瓣', bangumi: 'Bangumi', thetvdb: 'TheTVDB' }[direct.source]
+      // URL 中推导出的源与当前 tab 不一致，自动切换
+      if (direct.source !== matchSource) {
+        setMatchSource(direct.source)
+        toast.info(`已识别为 ${sourceLabel} 链接，已自动切换数据源`)
+      }
+      toast.success(`已识别 ${sourceLabel} ID：${direct.id}，正在绑定…`)
+      // 直接走 select 流程完成绑定（剧集页是点击即绑，没有"应用"中间态）
+      const idForApply: number | string = direct.source === 'douban' ? direct.id : Number(direct.id)
+      // 用 microtask 延迟到下一帧执行，避免 setMatchSource 与 select 在同一渲染中抢状态
+      setTimeout(() => { handleMatchSelect(idForApply) }, 0)
+      return
+    }
     setMatchSearching(true)
     try {
       if (matchSource === 'tmdb') {
@@ -235,6 +253,8 @@ export default function SeriesDetailPage() {
       if (seasonData.length > 0) {
         setActiveSeason(seasonData[0].season_num)
       }
+      // 失效所有列表页缓存（首页/浏览/合集/收藏/历史）→ 返回桌面时自动拉取最新数据
+      invalidateMediaListCaches()
       setShowMatchModal(false)
       toast.success(`剧集匹配成功（来源：${sourceNameMap[matchSource]}）`)
     } catch {
@@ -250,6 +270,7 @@ export default function SeriesDetailPage() {
       await adminApi.unmatchSeriesMetadata(id)
       const res = await seriesApi.detail(id)
       setSeries(res.data.data)
+      invalidateMediaListCaches()
       setShowUnmatchConfirm(false)
       toast.success('已解除匹配')
     } catch {
@@ -264,6 +285,7 @@ export default function SeriesDetailPage() {
       await adminApi.scrapeSeriesMetadata(id)
       const res = await seriesApi.detail(id)
       setSeries(res.data.data)
+      invalidateMediaListCaches()
       toast.success('元数据刷新成功')
     } catch (err) {
       toast.error(formatErrMsg(err, '元数据刷新失败'))
@@ -294,6 +316,7 @@ export default function SeriesDetailPage() {
       await adminApi.updateSeriesMetadata(id, editForm)
       const res = await seriesApi.detail(id)
       setSeries(res.data.data)
+      invalidateMediaListCaches()
       setShowEditModal(false)
       toast.success('元数据已更新')
     } catch {
@@ -305,6 +328,7 @@ export default function SeriesDetailPage() {
     if (!id) return
     try {
       await adminApi.deleteSeries(id)
+      invalidateMediaListCaches()
       toast.success('剧集已删除')
       navigate(-1)
     } catch {
@@ -977,7 +1001,7 @@ export default function SeriesDetailPage() {
                 value={matchQuery}
                 onChange={(e) => setMatchQuery(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && handleMatchSearch()}
-                placeholder="输入剧集名称搜索..."
+                placeholder="输入名称 / TMDb·豆瓣·Bangumi 链接 / ID（如 1399）"
                 className="flex-1 rounded-xl px-4 py-2.5 text-sm outline-none"
                 style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-default)', color: 'var(--text-primary)' }}
                 autoFocus
@@ -1079,7 +1103,7 @@ export default function SeriesDetailPage() {
               })}
               {matchResults.length === 0 && !matchSearching && (
                 <div className="py-8 text-center text-sm" style={{ color: 'var(--text-muted)' }}>
-                  输入关键词搜索 {{ tmdb: 'TMDb', douban: '豆瓣', bangumi: 'Bangumi', thetvdb: 'TheTVDB' }[matchSource]} 数据库
+                  输入关键词搜索 {{ tmdb: 'TMDb', douban: '豆瓣', bangumi: 'Bangumi', thetvdb: 'TheTVDB' }[matchSource]} 数据库，或直接粘贴 URL / ID
                 </div>
               )}
             </div>
@@ -1341,7 +1365,7 @@ function EpisodeSlideCard({ episode: ep, seriesTitle, historyRecord }: { episode
         </div>
         {/* 集数标签 */}
         <div className="absolute left-1.5 top-1.5">
-          <span className="badge-neon text-[10px]">
+          <span className="badge-neon-overlay text-[10px]">
             E{String(ep.episode_num).padStart(2, '0')}
           </span>
         </div>

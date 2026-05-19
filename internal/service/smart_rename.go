@@ -1142,10 +1142,16 @@ func (s *SmartRenameService) callAIBatchSeries(parentDir string, samples []strin
 	return &out, nil
 }
 
-// stripJSONFence 剥离 Markdown 代码围栏。
+// stripJSONFence 剥离 Markdown 代码围栏并做鲁棒清洗。
 //
-// 返回“首个 `{` 到最后一个 `}` 之间”的 JSON 主体，
-// 避免代码围栏 / 引导说明多余输出干扰后续 Unmarshal。
+// 1. 去除 ```json ... ``` 围栏；
+// 2. 截取首个 `{` 到最后一个 `}` 的 JSON 主体；
+// 3. 调用 sanitizeAIJSON 修复 AI 常见的不规范输出，例如：
+//   - 数字字段被加引号："year": "2024"  -> "year": 2024
+//   - 数字中混入空格："year": 2 024      -> "year": 2024
+//   - 中文逗号 / 全角引号；
+//
+// 这样可以大幅减少 json.Unmarshal 的失败率。
 func stripJSONFence(s string) string {
 	s = strings.TrimSpace(s)
 	s = strings.TrimPrefix(s, "```json")
@@ -1155,9 +1161,68 @@ func stripJSONFence(s string) string {
 	start := strings.Index(s, "{")
 	end := strings.LastIndex(s, "}")
 	if start >= 0 && end >= start {
-		return s[start : end+1]
+		s = s[start : end+1]
+	}
+	return sanitizeAIJSON(s)
+}
+
+// sanitizeAIJSON 修复 AI 输出 JSON 的常见小毛病，使其可被 json.Unmarshal 解析。
+//
+// 处理要点（保守、幂等）：
+//  1. 全角符号转半角："，"→","、"："→":"、""""→`""`、"”"→`""`；
+//  2. 已知数字字段（year/tmdb_id/season/episode/confidence）被双引号包裹时去掉引号；
+//  3. 已知数字字段值中夹杂的空格剔除（例如 `"year": 2 024` -> `"year": 2024`）。
+//
+// 仅对已知字段做处理，避免误伤 title/title_alt 等字符串字段。
+func sanitizeAIJSON(s string) string {
+	if s == "" {
+		return s
+	}
+	// 全角 → 半角
+	replacer := strings.NewReplacer(
+		"，", ",",
+		"：", ":",
+		"“", `"`,
+		"”", `"`,
+		"‘", `"`,
+		"’", `"`,
+	)
+	s = replacer.Replace(s)
+
+	// 针对已知数字字段做修复
+	for _, key := range []string{"year", "tmdb_id", "season", "episode", "confidence"} {
+		s = fixNumericField(s, key)
 	}
 	return s
+}
+
+// fixNumericField 把 `"key": "..."` 的字符串值改为裸数字，并去掉数字内空格。
+// 若未匹配则原样返回。仅处理首个匹配（每个字段在 JSON 里通常仅出现一次）。
+var numericFieldRe = map[string]*regexp.Regexp{}
+
+func fixNumericField(s, key string) string {
+	re, ok := numericFieldRe[key]
+	if !ok {
+		// 例如：  "year"  :   "2 024"   或   "year": 2 024
+		// 捕获组 1：值（数字内容，可能含空格 / 小数点 / 负号）
+		re = regexp.MustCompile(`"` + regexp.QuoteMeta(key) + `"\s*:\s*"?([\-\d\s.]+)"?`)
+		numericFieldRe[key] = re
+	}
+	return re.ReplaceAllStringFunc(s, func(match string) string {
+		groups := re.FindStringSubmatch(match)
+		if len(groups) < 2 {
+			return match
+		}
+		raw := groups[1]
+		// 剔除空格
+		clean := strings.ReplaceAll(raw, " ", "")
+		clean = strings.TrimSpace(clean)
+		if clean == "" || clean == "-" || clean == "." {
+			clean = "0"
+		}
+		// 输出为裸数字（无引号）
+		return `"` + key + `": ` + clean
+	})
 }
 
 // ================================ P2: 命名模板 ===============================

@@ -59,6 +59,28 @@ func main() {
 		sugar.Fatalf("连接数据库失败: %v", err)
 	}
 
+	// SQLite 写入是排他锁，多连接只会增加 SQLITE_BUSY 概率。
+	// 强制单写连接 + WAL（读不阻塞写），是 SQLite 单文件场景的最佳实践。
+	if sqlDB, dbErr := db.DB(); dbErr == nil {
+		sqlDB.SetMaxOpenConns(1)
+		sqlDB.SetMaxIdleConns(1)
+		sqlDB.SetConnMaxLifetime(0)
+	} else {
+		sugar.Warnf("获取底层 sql.DB 失败: %v", dbErr)
+	}
+	// 双保险：即便 DSN 参数被驱动忽略，这里也会通过 PRAGMA 显式打开关键开关
+	if err := db.Exec("PRAGMA journal_mode=WAL").Error; err != nil {
+		sugar.Warnf("设置 PRAGMA journal_mode=WAL 失败: %v", err)
+	}
+	if cfg.Database.BusyTimeout > 0 {
+		if err := db.Exec(fmt.Sprintf("PRAGMA busy_timeout=%d", cfg.Database.BusyTimeout)).Error; err != nil {
+			sugar.Warnf("设置 PRAGMA busy_timeout 失败: %v", err)
+		}
+	}
+	if err := db.Exec("PRAGMA synchronous=NORMAL").Error; err != nil {
+		sugar.Warnf("设置 PRAGMA synchronous=NORMAL 失败: %v", err)
+	}
+
 	// 自动迁移
 	if err := model.AutoMigrate(db); err != nil {
 		sugar.Fatalf("数据库迁移失败: %v", err)
@@ -466,6 +488,17 @@ func main() {
 		admin.GET("/transcode/status", handlers.Admin.TranscodeStatus)
 		admin.GET("/transcode/throttle", handlers.Admin.TranscodeThrottleStats)
 		admin.POST("/transcode/:taskId/cancel", handlers.Admin.CancelTranscode)
+		// 转码任务管理面板（与预处理交互对齐）
+		// 注意：使用 /transcode-tasks 前缀，避免与上面 /transcode/:taskId/cancel 的通配段产生 Gin 路由冲突
+		admin.GET("/transcode-tasks", handlers.Admin.ListTranscodeTasks)
+		admin.GET("/transcode-tasks/statistics", handlers.Admin.GetTranscodeStatistics)
+		admin.POST("/transcode-tasks/batch-cancel", handlers.Admin.BatchCancelTranscodeTasks)
+		admin.POST("/transcode-tasks/batch-delete", handlers.Admin.BatchDeleteTranscodeTasks)
+		admin.POST("/transcode-tasks/batch-retry", handlers.Admin.BatchRetryTranscodeTasks)
+		admin.POST("/transcode-tasks/batch-submit", handlers.Admin.BatchSubmitTranscodeTasks)
+		admin.POST("/transcode-tasks/:id/cancel", handlers.Admin.CancelTranscodeTask)
+		admin.POST("/transcode-tasks/:id/retry", handlers.Admin.RetryTranscodeTask)
+		admin.DELETE("/transcode-tasks/:id", handlers.Admin.DeleteTranscodeTask)
 
 		// TMDb 配置管理
 		admin.GET("/settings/tmdb", handlers.Admin.GetTMDbConfig)
@@ -487,13 +520,6 @@ func main() {
 		admin.GET("/system-logs/stats", handlers.SystemLog.GetSystemLogStats)
 		admin.GET("/system-logs/export", handlers.SystemLog.ExportSystemLogs)
 		admin.POST("/system-logs/clean", handlers.SystemLog.CleanSystemLogs)
-
-		// 定时任务管理
-		admin.GET("/tasks", handlers.Admin.ListScheduledTasks)
-		admin.POST("/tasks", handlers.Admin.CreateScheduledTask)
-		admin.PUT("/tasks/:id", handlers.Admin.UpdateScheduledTask)
-		admin.DELETE("/tasks/:id", handlers.Admin.DeleteScheduledTask)
-		admin.POST("/tasks/:id/run", handlers.Admin.RunScheduledTaskNow)
 
 		// 批量操作
 		admin.POST("/batch/scan", handlers.Admin.BatchScan)
@@ -634,6 +660,7 @@ func main() {
 		admin.GET("/scan-classify/stats", handlers.ScanPostProcess.Stats)
 		admin.GET("/scan-classify/:mediaId", handlers.ScanPostProcess.Get)
 		admin.POST("/scan-classify/reprocess", handlers.ScanPostProcess.Reprocess)
+		admin.POST("/scan-classify/cancel", handlers.ScanPostProcess.Cancel)
 		admin.POST("/scan-classify/correct", handlers.ScanPostProcess.Correct)
 		admin.DELETE("/scan-classify", handlers.ScanPostProcess.Clear)
 

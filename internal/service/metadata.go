@@ -2260,7 +2260,62 @@ func (s *MetadataService) syncSeriesToEpisodes(seriesID string, series *model.Se
 			s.mediaRepo.Update(&ep)
 		}
 	}
-	s.logger.Debugf("已同步合集元数据到 %d 集", len(episodes))
+
+	// 第三步：评估并回写每个 episode 的 scrape_status / last_scrape_at
+	// 统一口径（与 evaluateSeriesScrapeStatus / executeScrapeFile 保持一致）：
+	//   - Overview 与 PosterPath 都齐 → scraped
+	//   - 至少有一项核心信号（Overview/PosterPath/Year/Rating/Genres/任一外部 ID）→ partial
+	//   - 一无所获 → 不动（保持 pending，避免误标 failed）
+	// 注意：手动锁定（manual）不做覆盖，避免覆盖用户人工设置
+	statusUpdated := 0
+	if refreshed, ferr := s.mediaRepo.ListBySeriesID(seriesID); ferr == nil {
+		now := time.Now()
+		for i := range refreshed {
+			ep := &refreshed[i]
+			if ep.ScrapeStatus == "manual" {
+				continue
+			}
+			newStatus := evaluateMediaScrapeStatus(ep)
+			if newStatus == "" {
+				continue
+			}
+			// 状态没变化时也刷一下 last_scrape_at，方便统计
+			fields := map[string]interface{}{
+				"scrape_status":  newStatus,
+				"last_scrape_at": now,
+			}
+			if err := s.mediaRepo.UpdateFields(ep.ID, fields); err == nil {
+				statusUpdated++
+			}
+		}
+	}
+	s.logger.Debugf("已同步合集元数据到 %d 集，刮削状态回写 %d 集", len(episodes), statusUpdated)
+}
+
+// evaluateMediaScrapeStatus 根据 Media 当前已落地的字段，判定其刮削状态。
+// 与 evaluateSeriesScrapeStatus 同一口径，但作用于单条 Media（包括 episode 与 movie）。
+//
+//   - scraped : Overview 与 PosterPath 都已落地（核心元数据齐全）
+//   - partial : 至少有一项核心信号（Overview / PosterPath / Year / Rating / Genres / 任一外部 ID）
+//   - ""      : 一无所获时返回空串，调用方自行决定保留原状态（避免覆盖 pending 为 failed）
+func evaluateMediaScrapeStatus(m *model.Media) string {
+	if m == nil {
+		return ""
+	}
+	hasOverview := strings.TrimSpace(m.Overview) != ""
+	hasPoster := strings.TrimSpace(m.PosterPath) != ""
+	hasYear := m.Year > 0
+	hasRating := m.Rating > 0
+	hasGenres := strings.TrimSpace(m.Genres) != ""
+	hasAnyID := m.TMDbID > 0 || m.DoubanID != "" || m.BangumiID > 0 || m.IMDbID != ""
+
+	if hasOverview && hasPoster {
+		return "scraped"
+	}
+	if hasOverview || hasPoster || hasAnyID || hasYear || hasRating || hasGenres {
+		return "partial"
+	}
+	return ""
 }
 
 // ScrapeAllSeries 为媒体库下所有剧集合集刮削元数据
@@ -2360,6 +2415,32 @@ func (s *MetadataService) propagateSeriesPosterToEpisodes(seriesID string) {
 	}
 	if updated > 0 {
 		s.logger.Infof("剧集封面/评分已同步到 %d 集 (series_id=%s)", updated, seriesID)
+	}
+
+	// 同步刮削状态：与 syncSeriesToEpisodes 同口径，避免 episode 长期处于 pending
+	if refreshed, ferr := s.mediaRepo.ListBySeriesID(seriesID); ferr == nil {
+		now := time.Now()
+		statusUpdated := 0
+		for i := range refreshed {
+			ep := &refreshed[i]
+			if ep.ScrapeStatus == "manual" {
+				continue
+			}
+			newStatus := evaluateMediaScrapeStatus(ep)
+			if newStatus == "" {
+				continue
+			}
+			fields := map[string]interface{}{
+				"scrape_status":  newStatus,
+				"last_scrape_at": now,
+			}
+			if err := s.mediaRepo.UpdateFields(ep.ID, fields); err == nil {
+				statusUpdated++
+			}
+		}
+		if statusUpdated > 0 {
+			s.logger.Infof("剧集刮削状态已回写 %d 集 (series_id=%s)", statusUpdated, seriesID)
+		}
 	}
 }
 

@@ -74,6 +74,14 @@ type TranscodeService struct {
 	throttleSuspendSeconds atomic.Uint64
 	// 累积挂起次数
 	throttleSuspendCount atomic.Uint64
+
+	// ==================== 缓存磁盘占用（供 admin 面板展示） ====================
+	// 扫描整个 cache/transcode 目录开销可能较大（百 GB+ 时 IO 显著），
+	// 用 30s TTL 缓存避免每次刷新都重扫；并发读取用 RWMutex 保护。
+	diskUsageMu    sync.RWMutex
+	diskUsageBytes int64
+	diskUsageAt    time.Time
+	diskUsageTTL   time.Duration
 }
 
 // ThrottleStats 节流统计（对外暴露）
@@ -350,10 +358,11 @@ func (s *TranscodeService) startTranscodeInternal(media *model.Media, quality st
 	os.MkdirAll(outputDir, 0755)
 
 	task := &model.TranscodeTask{
-		MediaID:   media.ID,
-		Quality:   quality,
-		Status:    "pending",
-		OutputDir: outputDir,
+		MediaID:    media.ID,
+		Quality:    quality,
+		Status:     "pending",
+		OutputDir:  outputDir,
+		MediaTitle: media.DescriptiveTitle(),
 	}
 
 	if err := s.repo.Create(task); err != nil {
@@ -418,6 +427,8 @@ func (s *TranscodeService) processJob(job *TranscodeJob) {
 	s.logger.Infof("开始转码: %s (%s)", job.Media.Title, job.Quality)
 
 	job.Task.Status = "running"
+	now := time.Now()
+	job.Task.StartedAt = &now
 	s.repo.Update(job.Task)
 
 	// 广播转码开始事件
@@ -604,6 +615,8 @@ success:
 
 	job.Task.Status = "done"
 	job.Task.Progress = 100
+	completedAt := time.Now()
+	job.Task.CompletedAt = &completedAt
 	s.repo.Update(job.Task)
 
 	s.mu.Lock()
@@ -930,6 +943,287 @@ func (s *TranscodeService) buildFFmpegHDRTonemapFilter(media *model.Media, width
 			"format=yuv420p,scale=%d:%d",
 		width, height,
 	)
+}
+
+// ==================== 任务管理 API（供管理面板使用） ====================
+//
+// 这一组方法为「转码任务」面板提供与「视频预处理」面板对齐的交互能力：
+// 列表查询 / 状态统计 / 单条删除·重试 / 批量取消·删除·重试。
+// 注意：转码服务本身不支持暂停/恢复（节流由播放进度驱动），所以面板无对应入口。
+
+// TranscodeStatistics 面板顶部统计卡片所需的数据
+type TranscodeStatistics struct {
+	StatusCounts  map[string]int64 `json:"status_counts"`
+	RunningCount  int              `json:"running_count"`
+	ActiveWorkers int              `json:"active_workers"`
+	MaxWorkers    int              `json:"max_workers"`
+	HWAccel       string           `json:"hw_accel"`
+	// 转码缓存目录占用（cache/transcode 整个子树）
+	DiskUsageBytes int64  `json:"disk_usage_bytes"`
+	DiskUsageDir   string `json:"disk_usage_dir"`
+}
+
+// ListTasks 分页查询转码任务（包含所有历史，按 updated_at 倒序）
+//
+// 列表展示场景使用 Media 关联补全 media_title（兼容旧任务未写 MediaTitle 字段的情况）。
+func (s *TranscodeService) ListTasks(page, pageSize int, status string) ([]model.TranscodeTask, int64, error) {
+	tasks, total, err := s.repo.ListAll(page, pageSize, status)
+	if err != nil {
+		return tasks, total, err
+	}
+	for i := range tasks {
+		// 优先用关联的 Media 拿到带年份/集数信息的描述性标题
+		if tasks[i].Media.ID != "" {
+			tasks[i].MediaTitle = tasks[i].Media.DescriptiveTitle()
+		}
+	}
+	return tasks, total, err
+}
+
+// GetStatistics 返回转码任务整体统计
+func (s *TranscodeService) GetStatistics() TranscodeStatistics {
+	counts, _ := s.repo.CountByStatus()
+	if counts == nil {
+		counts = map[string]int64{}
+	}
+	s.mu.RLock()
+	running := len(s.running)
+	s.mu.RUnlock()
+	// 转码服务的 worker 数 = NumCPU（详见 NewTranscodeService）
+	maxW := runtime.NumCPU()
+	if maxW < 1 {
+		maxW = 1
+	}
+	dir := filepath.Join(s.cfg.Cache.CacheDir, "transcode")
+	return TranscodeStatistics{
+		StatusCounts:   counts,
+		RunningCount:   running,
+		ActiveWorkers:  running, // 内存中的 running map 即活跃 worker
+		MaxWorkers:     maxW,
+		HWAccel:        s.hwAccel,
+		DiskUsageBytes: s.GetCacheDiskUsage(),
+		DiskUsageDir:   dir,
+	}
+}
+
+// GetCacheDiskUsage 返回 cache/transcode 目录的总占用字节数。
+//
+// 实现细节：
+//   - 使用 30s TTL 内存缓存，避免每次刷新（特别是面板每 3s 自动刷新一次）
+//     都对可能数百 GB 的目录做 walk，造成 IO 抖动。
+//   - 首次调用同步扫描；后续命中缓存直接返回。
+//   - walk 中遇到的错误不中断流程，按尽力而为统计；目录不存在时返回 0。
+func (s *TranscodeService) GetCacheDiskUsage() int64 {
+	ttl := s.diskUsageTTL
+	if ttl <= 0 {
+		ttl = 30 * time.Second
+	}
+
+	// 命中缓存
+	s.diskUsageMu.RLock()
+	if !s.diskUsageAt.IsZero() && time.Since(s.diskUsageAt) < ttl {
+		v := s.diskUsageBytes
+		s.diskUsageMu.RUnlock()
+		return v
+	}
+	s.diskUsageMu.RUnlock()
+
+	// 未命中：执行 walk 统计
+	dir := filepath.Join(s.cfg.Cache.CacheDir, "transcode")
+	var total int64
+	if info, err := os.Stat(dir); err == nil && info.IsDir() {
+		_ = filepath.Walk(dir, func(_ string, fi os.FileInfo, walkErr error) error {
+			if walkErr != nil {
+				// 单个文件/目录读取失败不中断（例如权限不足或文件被删）
+				return nil
+			}
+			if fi != nil && !fi.IsDir() {
+				total += fi.Size()
+			}
+			return nil
+		})
+	}
+
+	s.diskUsageMu.Lock()
+	s.diskUsageBytes = total
+	s.diskUsageAt = time.Now()
+	s.diskUsageMu.Unlock()
+	return total
+}
+
+// InvalidateCacheDiskUsage 让缓存失效，下次 GetCacheDiskUsage 会重新扫描。
+// 在删除/批量删除任务、清理输出目录等明确改变占用的场景下调用。
+func (s *TranscodeService) InvalidateCacheDiskUsage() {
+	s.diskUsageMu.Lock()
+	s.diskUsageAt = time.Time{}
+	s.diskUsageMu.Unlock()
+}
+
+// DeleteTask 删除单条转码任务（仅终态可删，运行中任务请先取消）
+// 同时尝试清掉对应的输出目录，避免遗留缓存。
+func (s *TranscodeService) DeleteTask(taskID string) error {
+	task, err := s.repo.FindByID(taskID)
+	if err != nil {
+		return fmt.Errorf("任务不存在: %w", err)
+	}
+	if task.Status == "running" || task.Status == "pending" {
+		return fmt.Errorf("运行中的任务不可删除，请先取消")
+	}
+	// 清理输出目录（失败忽略，不影响 DB 删除）
+	if task.OutputDir != "" {
+		if err := os.RemoveAll(task.OutputDir); err != nil {
+			s.logger.Warnf("删除转码输出目录失败 %s: %v", task.OutputDir, err)
+		}
+		s.InvalidateCacheDiskUsage()
+	}
+	return s.repo.DeleteByID(taskID)
+}
+
+// RetryTask 重试失败/取消的转码任务
+//
+// 实现：直接调用 startTranscodeInternal（已有 mediaID+quality 去重逻辑），
+// 旧任务记录保留以备追溯，新任务会以新 ID 进入队列。
+func (s *TranscodeService) RetryTask(taskID string, mediaResolver func(mediaID string) (*model.Media, error)) error {
+	task, err := s.repo.FindByID(taskID)
+	if err != nil {
+		return fmt.Errorf("任务不存在: %w", err)
+	}
+	if task.Status == "running" || task.Status == "pending" {
+		return fmt.Errorf("任务正在运行中，无需重试")
+	}
+	if mediaResolver == nil {
+		return fmt.Errorf("缺少媒体解析器")
+	}
+	media, err := mediaResolver(task.MediaID)
+	if err != nil {
+		return fmt.Errorf("查找媒体失败: %w", err)
+	}
+	// 标记旧记录已重试
+	task.Retries++
+	task.Error = ""
+	s.repo.Update(task)
+
+	if _, err := s.startTranscodeInternal(media, task.Quality, 0); err != nil {
+		return fmt.Errorf("重新启动转码失败: %w", err)
+	}
+	return nil
+}
+
+// BatchCancelTasks 批量取消任务，仅对运行中的有效；返回成功取消数量
+func (s *TranscodeService) BatchCancelTasks(taskIDs []string) (int, error) {
+	cancelled := 0
+	for _, id := range taskIDs {
+		if err := s.CancelTranscode(id); err == nil {
+			cancelled++
+		}
+	}
+	return cancelled, nil
+}
+
+// BatchDeleteTasks 批量删除终态任务（运行中跳过）；返回成功删除数量
+func (s *TranscodeService) BatchDeleteTasks(taskIDs []string) (int64, error) {
+	if len(taskIDs) == 0 {
+		return 0, nil
+	}
+	cleared := false
+	// 先收集对应输出目录用于清理
+	for _, id := range taskIDs {
+		if t, err := s.repo.FindByID(id); err == nil && t.OutputDir != "" &&
+			t.Status != "running" && t.Status != "pending" {
+			if err := os.RemoveAll(t.OutputDir); err != nil {
+				s.logger.Warnf("删除转码输出目录失败 %s: %v", t.OutputDir, err)
+			}
+			cleared = true
+		}
+	}
+	if cleared {
+		s.InvalidateCacheDiskUsage()
+	}
+	return s.repo.DeleteByIDs(taskIDs)
+}
+
+// BatchRetryTasks 批量重试任务
+func (s *TranscodeService) BatchRetryTasks(taskIDs []string, mediaResolver func(mediaID string) (*model.Media, error)) (int, error) {
+	retried := 0
+	for _, id := range taskIDs {
+		if err := s.RetryTask(id, mediaResolver); err == nil {
+			retried++
+		}
+	}
+	return retried, nil
+}
+
+// BatchSubmitByMediaIDs 用户在"转码任务-选源提交"场景下批量提交转码任务
+//
+// 行为：
+//   - 对每个 mediaID 解析对应 Media，调用 GetAvailableQualities 过滤超出原始分辨率的档位
+//   - 与传入 qualities 求交集；交集为空则回退到该媒体的最低可用档位（保证至少入队一个）
+//   - 每个 (mediaID, quality) 调用 startTranscodeInternal，已完成或正在跑的会自动复用，不会重复消耗 CPU
+//   - 单条失败不阻塞其他媒体，整体返回成功提交的任务数与失败明细
+//
+// mediaResolver 由 handler 注入，避免 service 层直接依赖 repository 包。
+func (s *TranscodeService) BatchSubmitByMediaIDs(
+	mediaIDs []string,
+	qualities []string,
+	mediaResolver func(mediaID string) (*model.Media, error),
+) (submitted int, skipped int, tasks []*model.TranscodeTask, errs []string) {
+	if len(mediaIDs) == 0 {
+		return 0, 0, nil, []string{"media_ids 不能为空"}
+	}
+	if len(qualities) == 0 {
+		// 默认 720p 单档；调用方建议显式传档位
+		qualities = []string{"720p"}
+	}
+	tasks = make([]*model.TranscodeTask, 0, len(mediaIDs))
+
+	for _, mediaID := range mediaIDs {
+		media, err := mediaResolver(mediaID)
+		if err != nil || media == nil {
+			skipped++
+			errs = append(errs, fmt.Sprintf("%s: 媒体不存在", mediaID))
+			continue
+		}
+
+		// 过滤超出原始分辨率的档位
+		available := s.GetAvailableQualities(media)
+		availSet := make(map[string]struct{}, len(available))
+		for _, q := range available {
+			availSet[q] = struct{}{}
+		}
+		var effective []string
+		for _, q := range qualities {
+			if _, ok := availSet[q]; ok {
+				effective = append(effective, q)
+			}
+		}
+		// 交集为空 → 回退到该媒体的最低可用档位
+		if len(effective) == 0 && len(available) > 0 {
+			effective = []string{available[0]}
+		}
+		if len(effective) == 0 {
+			skipped++
+			errs = append(errs, fmt.Sprintf("%s: 无可用转码档位", mediaID))
+			continue
+		}
+
+		mediaSubmitted := 0
+		for _, q := range effective {
+			task, err := s.startTranscodeInternal(media, q, 0)
+			if err != nil {
+				s.logger.Warnf("BatchSubmitByMediaIDs: %s/%s 启动失败: %v", mediaID, q, err)
+				continue
+			}
+			tasks = append(tasks, task)
+			mediaSubmitted++
+		}
+		if mediaSubmitted > 0 {
+			submitted++
+		} else {
+			skipped++
+			errs = append(errs, fmt.Sprintf("%s: 所有档位启动均失败", mediaID))
+		}
+	}
+	return submitted, skipped, tasks, errs
 }
 
 // CleanupStaleCache 清理过期的转码缓存（供 Scheduler cleanup 任务调用）

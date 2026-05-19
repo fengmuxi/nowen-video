@@ -43,13 +43,37 @@ export default function FileStatsBar({ stats }: FileStatsBarProps) {
 
   const items = [...baseItems, ...extraItems]
 
+  // 根据 items 数量动态选择 lg 列数（8 或 9 或 10），保持单行展示
+  const lgColsMap: Record<number, string> = {
+    8: 'lg:grid-cols-8',
+    9: 'lg:grid-cols-9',
+    10: 'lg:grid-cols-10',
+  }
+  const lgCols = lgColsMap[items.length] || 'lg:grid-cols-8'
+
   return (
-    <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3">
+    <div
+      className={clsx(
+        'grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 rounded-lg overflow-hidden',
+        lgCols
+      )}
+      style={{ background: 'var(--bg-subtle)', border: '1px solid var(--border-default)' }}
+    >
       {items.map((item, i) => (
-        <div key={i} className="glass-panel rounded-xl p-3 text-center">
-          <item.icon size={18} className={clsx('mx-auto mb-1', item.color)} />
-          <div className="text-lg font-bold" style={{ color: 'var(--text-primary)' }}>{item.value}</div>
-          <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>{item.label}</div>
+        <div
+          key={i}
+          className="flex items-center gap-2 px-2.5 py-1.5 border-r border-b last:border-r-0"
+          style={{ borderColor: 'var(--border-default)' }}
+        >
+          <item.icon size={14} className={clsx('shrink-0', item.color)} />
+          <div className="min-w-0 flex-1">
+            <div className="text-sm font-bold leading-tight truncate" style={{ color: 'var(--text-primary)' }}>
+              {item.value}
+            </div>
+            <div className="text-[10px] leading-tight truncate" style={{ color: 'var(--text-tertiary)' }}>
+              {item.label}
+            </div>
+          </div>
         </div>
       ))}
     </div>

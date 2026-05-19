@@ -1071,6 +1071,12 @@ func (s *FileManagerService) GetRenameTemplates() []RenameTemplate {
 
 // GetStats 获取文件管理统计（支持作用域：按媒体库 / 文件夹路径）
 func (s *FileManagerService) GetStats(libraryID, folderPath string) (*FileManagerStats, error) {
+	// 幂等自愈：把"元数据齐但 scrape_status=pending/空"的存量行修复为 scraped
+	// 主要用于早期版本剧集 episode 漏写状态字段的历史数据；命中为 0 时近乎免费
+	if n, err := s.mediaRepo.RepairScrapeStatusForCompleted(); err == nil && n > 0 {
+		s.logger.Infof("自愈修复刮削状态：%d 条 media 由 pending → scraped", n)
+	}
+
 	stats := &FileManagerStats{}
 
 	// 总文件数

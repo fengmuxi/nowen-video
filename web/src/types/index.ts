@@ -463,9 +463,32 @@ export interface SystemInfo {
 export interface TranscodeJob {
   id: string
   media_id: string
+  media_title?: string
   quality: string
   status: string
   progress: number
+  output_dir?: string
+  error?: string
+  priority?: number
+  retries?: number
+  max_retry?: number
+  started_at?: string | null
+  completed_at?: string | null
+  created_at?: string
+  updated_at?: string
+}
+
+// 转码任务整体统计（与预处理面板顶部卡片对齐）
+export interface TranscodeStatistics {
+  status_counts: Record<string, number>
+  running_count: number
+  active_workers: number
+  max_workers: number
+  hw_accel: string
+  // 转码缓存目录占用（字节）。由后端聚合 cache/transcode 子树计算，30s TTL 缓存
+  disk_usage_bytes?: number
+  // 缓存目录的绝对路径，仅用于 UI 提示展示
+  disk_usage_dir?: string
 }
 
 // ==================== 播放信息 ====================
@@ -623,27 +646,9 @@ export interface CommentListResponse {
   rating_count: number
 }
 
-// ==================== 定时任务 ====================
-export interface ScheduledTask {
-  id: string
-  name: string
-  type: 'scan' | 'scrape' | 'cleanup'
-  schedule: string
-  target_id: string
-  enabled: boolean
-  last_run: string | null
-  next_run: string | null
-  status: 'idle' | 'running' | 'error'
-  last_error: string
-  created_at: string
-}
-
-export interface CreateScheduledTaskRequest {
-  name: string
-  type: 'scan' | 'scrape' | 'cleanup'
-  schedule: string
-  target_id?: string
-}
+// ==================== 定时任务（已下线） ====================
+// ScheduledTask / CreateScheduledTaskRequest 已移除，面向用户的定时任务调度不再提供。
+// 扫描 / 刮削 / 缓存清理请使用各业务页面的手动入口。
 
 // ==================== 权限管理 ====================
 export interface UserPermission {

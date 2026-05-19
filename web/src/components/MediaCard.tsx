@@ -195,7 +195,7 @@ export default function MediaCard({ media, series }: MediaCardProps) {
 
             {/* 分辨率标签（仅电影）— 使用 isolate 隔离 3D 变换影响 */}
             {!isSeries && media!.resolution && (
-              <span className="badge-neon absolute right-2 top-2 z-20" style={{ transform: 'translateZ(0)' }}>
+              <span className="badge-neon-overlay absolute right-2 top-2 z-20" style={{ transform: 'translateZ(0)' }}>
                 {media!.resolution}
               </span>
             )}

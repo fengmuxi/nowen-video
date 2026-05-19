@@ -11,6 +11,8 @@ import SubtitleManager from '@/components/SubtitleManager'
 import { bumpPosterVersion } from '@/stores/mediaRefresh'
 import { useTranslation } from '@/i18n'
 import { formatErrMsg } from '@/utils/error'
+import { parseDirectMatchId } from '@/utils/parseDirectMatchId'
+import { invalidateMediaListCaches } from '@/utils/invalidateMediaCaches'
 import { motion, AnimatePresence } from 'framer-motion'
 import { easeSmooth, durations } from '@/lib/motion'
 import { ArrowLeft } from 'lucide-react'
@@ -148,6 +150,7 @@ export default function MediaDetailPage() {
       await mediaApi.scrape(id)
       const res = await mediaApi.detail(id)
       setMedia(res.data.data)
+      invalidateMediaListCaches()
       toast.success(t('mediaDetail.scrapeSuccess'))
     } catch (err) {
       toast.error(formatErrMsg(err, t('mediaDetail.scrapeFailed')))
@@ -202,6 +205,33 @@ export default function MediaDetailPage() {
 
   const handleMatchSearch = async () => {
     if (!matchQuery.trim()) return
+    // 优先尝试直输 ID / URL 解析（支持 https://www.themoviedb.org/movie/128881-3 、128881、128881-3 等）
+    const direct = parseDirectMatchId(matchQuery, matchSource)
+    if (direct) {
+      // URL 中推导出的源与当前 tab 不一致，自动切换
+      if (direct.source !== matchSource) {
+        setMatchSource(direct.source)
+        toast.info(`已识别为 ${{ tmdb: 'TMDb', douban: '豆瓣', bangumi: 'Bangumi', thetvdb: 'TheTVDB' }[direct.source]} 链接，已自动切换数据源`)
+      }
+      // 准备一条“虚拟结果”，允许用户直接点击应用
+      const idForApply: number | string = direct.source === 'douban' ? direct.id : Number(direct.id)
+      const placeholder: any = {
+        id: idForApply,
+        title: `直输 ID：${direct.id}`,
+        original_title: '',
+        name: `直输 ID：${direct.id}`,
+        original_name: '',
+        overview: `点击“应用”将本条目绑定到 ${{ tmdb: 'TMDb', douban: '豆瓣', bangumi: 'Bangumi', thetvdb: 'TheTVDB' }[direct.source]} ID = ${direct.id}。`,
+        release_date: '',
+        first_air_date: '',
+        vote_average: 0,
+        poster_path: '',
+      }
+      setMatchResults([placeholder])
+      setMatchSelectedId(idForApply)
+      toast.success(`已识别 ${{ tmdb: 'TMDb', douban: '豆瓣', bangumi: 'Bangumi', thetvdb: 'TheTVDB' }[direct.source]} ID：${direct.id}，点击“应用”即可绑定`)
+      return
+    }
     setMatchSearching(true)
     try {
       if (matchSource === 'tmdb') {
@@ -277,6 +307,8 @@ export default function MediaDetailPage() {
                 bumpPosterVersion()
                 bumpPosterVersion()
                 bumpPosterVersion()
+      // 失效所有列表页缓存（首页/浏览/合集/收藏/历史）→ 用户返回时自动拉取最新数据，无需刷新
+      invalidateMediaListCaches()
       setShowMatchModal(false)
       setMatchSelectedId(null)
       toast.success(t('mediaDetail.matchSuccess', { source: sourceNameMap[matchSource] }))
@@ -294,6 +326,7 @@ export default function MediaDetailPage() {
       const res = await mediaApi.detail(id)
       setMedia(res.data.data)
       setPosterVersion(Date.now())
+      invalidateMediaListCaches()
       setShowUnmatchConfirm(false)
       toast.success(t('mediaDetail.unmatchSuccess'))
     } catch {
@@ -309,6 +342,7 @@ export default function MediaDetailPage() {
       const res = await mediaApi.detail(id)
       setMedia(res.data.data)
       setPosterVersion(Date.now())
+      invalidateMediaListCaches()
       toast.success(t('mediaDetail.refreshSuccess'))
     } catch (err) {
       toast.error(formatErrMsg(err, t('mediaDetail.refreshFailed')))
@@ -341,6 +375,7 @@ export default function MediaDetailPage() {
       const res = await mediaApi.detail(id)
       setMedia(res.data.data)
       setPosterVersion(Date.now())
+      invalidateMediaListCaches()
       setShowEditModal(false)
       toast.success(t('mediaDetail.editSuccess'))
     } catch {
@@ -352,6 +387,7 @@ export default function MediaDetailPage() {
     if (!id) return
     try {
       await adminApi.deleteMedia(id)
+      invalidateMediaListCaches()
       toast.success(t('mediaDetail.deleteSuccess'))
       navigate(-1)
     } catch {
