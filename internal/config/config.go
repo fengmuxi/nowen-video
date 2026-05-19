@@ -1091,6 +1091,44 @@ func (c *Config) ClearTMDbAPIKey() error {
 	return c.SetTMDbAPIKey("")
 }
 
+// GetTMDbAPIProxy 获取 TMDb API 代理地址（线程安全）
+func (c *Config) GetTMDbAPIProxy() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.Secrets.TMDbAPIProxy
+}
+
+// SetTMDbAPIProxy 设置 TMDb API 代理地址并持久化
+func (c *Config) SetTMDbAPIProxy(proxy string) error {
+	c.mu.Lock()
+	c.Secrets.TMDbAPIProxy = proxy
+	c.mu.Unlock()
+
+	viper.Set("secrets.tmdb_api_proxy", proxy)
+	c.updateSecretsFile("tmdb_api_proxy", proxy)
+
+	return c.saveConfig()
+}
+
+// GetTMDbImageProxy 获取 TMDb 图片代理地址（线程安全）
+func (c *Config) GetTMDbImageProxy() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.Secrets.TMDbImageProxy
+}
+
+// SetTMDbImageProxy 设置 TMDb 图片代理地址并持久化
+func (c *Config) SetTMDbImageProxy(proxy string) error {
+	c.mu.Lock()
+	c.Secrets.TMDbImageProxy = proxy
+	c.mu.Unlock()
+
+	viper.Set("secrets.tmdb_image_proxy", proxy)
+	c.updateSecretsFile("tmdb_image_proxy", proxy)
+
+	return c.saveConfig()
+}
+
 // ==================== 豆瓣 Cookie 管理 ====================
 
 // GetDoubanCookie 获取豆瓣登录 Cookie（线程安全）

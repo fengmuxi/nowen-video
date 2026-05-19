@@ -506,6 +506,10 @@ func main() {
 		admin.DELETE("/settings/tmdb", handlers.Admin.ClearTMDbConfig)
 		admin.GET("/settings/tmdb/validate", handlers.Admin.ValidateTMDbConfig)
 		admin.POST("/settings/tmdb/test", handlers.Admin.TestTMDbAPIKey)
+		// TMDb 代理配置（API / 图片镜像，国内直连超时时使用）
+		admin.PUT("/settings/tmdb/proxy", handlers.Admin.UpdateTMDbProxy)
+		admin.DELETE("/settings/tmdb/proxy", handlers.Admin.ClearTMDbProxy)
+		admin.POST("/settings/tmdb/proxy/test", handlers.Admin.TestTMDbProxy)
 
 		// 系统全局设置
 		admin.GET("/settings/system", handlers.Admin.GetSystemSettings)

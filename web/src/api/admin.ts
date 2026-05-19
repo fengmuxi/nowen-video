@@ -140,6 +140,30 @@ export const adminApi = {
   testTMDbKey: (apiKey: string) =>
     api.post<{ data: { valid: boolean; message: string } }>('/admin/settings/tmdb/test', { api_key: apiKey }),
 
+  // 更新 TMDb 代理（API/图片）。任一字段传空表示恢复官方直连
+  updateTMDbProxy: (apiProxy: string, imageProxy: string) =>
+    api.put<{ message: string; data: { api_proxy: string; image_proxy: string } }>(
+      '/admin/settings/tmdb/proxy',
+      { api_proxy: apiProxy, image_proxy: imageProxy },
+    ),
+
+  // 清除 TMDb 代理（恢复官方直连）
+  clearTMDbProxy: () =>
+    api.delete<{ message: string; data: { api_proxy: string; image_proxy: string } }>(
+      '/admin/settings/tmdb/proxy',
+    ),
+
+  // 测试 TMDb 代理连通性（仅探活，不验证 API Key）
+  // 任一字段留空则用当前已保存的配置；都为空则测试官方直连
+  testTMDbProxy: (apiProxy: string, imageProxy: string) =>
+    api.post<{ data: {
+      api: { ok: boolean; message: string; target: string }
+      image: { ok: boolean; message: string; target: string }
+    } }>(
+      '/admin/settings/tmdb/proxy/test',
+      { api_proxy: apiProxy, image_proxy: imageProxy },
+    ),
+
   // 批量操作
   batchScan: (libraryIds: string[]) =>
     api.post('/admin/batch/scan', { library_ids: libraryIds }),

@@ -149,6 +149,88 @@ func (s *MetadataService) tmdbGetWithRetry(url string) (*http.Response, error) {
 	return nil, fmt.Errorf("TMDb 请求失败（已重试）: %w", lastErr)
 }
 
+// PingTMDbProxy 仅探测代理地址的可达性（不验证 API Key）
+//
+// 参数：
+//
+//	apiProxy   要测试的 API 代理地址（如 https://api.tmdb.tools），传空表示用 https://api.themoviedb.org
+//	imageProxy 要测试的图片代理地址（如 https://image.tmdb.tools），传空表示用 https://image.tmdb.org
+//
+// 返回：
+//
+//	apiOK / apiMsg     API 代理是否可达 + 文案
+//	imgOK / imgMsg     图片代理是否可达 + 文案
+//
+// 说明：
+//   - API 代理通过 HEAD/GET `/3/configuration?api_key=test_ping` 探活：
+//     无论返回 200 还是 401，只要拿到 HTTP 响应就算"可达"，纯网络层探测
+//   - 图片代理通过 HEAD `/t/p/w92/null` 探活：404/200/301 都算可达
+//   - 全程 8 秒超时，独立于业务 client
+func (s *MetadataService) PingTMDbProxy(apiProxy, imageProxy string) (apiOK bool, apiMsg string, imgOK bool, imgMsg string) {
+	// 临时 client，避免业务超时设置干扰
+	client := &http.Client{Timeout: 8 * time.Second}
+
+	// ---- API 代理 ----
+	apiBase := strings.TrimRight(strings.TrimSpace(apiProxy), "/")
+	if apiBase == "" {
+		apiBase = "https://api.themoviedb.org"
+	}
+	apiURL := apiBase + "/3/configuration?api_key=ping"
+	if req, err := http.NewRequest("GET", apiURL, nil); err != nil {
+		apiMsg = "构造请求失败: " + err.Error()
+	} else {
+		setAPIHeaders(req)
+		resp, err := client.Do(req)
+		if err != nil {
+			apiMsg = "无法连通: " + err.Error()
+		} else {
+			defer resp.Body.Close()
+			// 只要拿到 HTTP 响应就说明代理本身可达（401 表示代理转发到了 TMDb，只是 Key 无效）
+			switch resp.StatusCode {
+			case http.StatusOK:
+				apiOK, apiMsg = true, fmt.Sprintf("可达（HTTP 200，%s）", apiBase)
+			case http.StatusUnauthorized:
+				apiOK, apiMsg = true, fmt.Sprintf("可达（HTTP 401，代理已转发，%s）", apiBase)
+			default:
+				apiOK = resp.StatusCode < 500
+				apiMsg = fmt.Sprintf("HTTP %d（%s）", resp.StatusCode, apiBase)
+			}
+		}
+	}
+
+	// ---- 图片代理 ----
+	imgBase := strings.TrimRight(strings.TrimSpace(imageProxy), "/")
+	if imgBase == "" {
+		imgBase = "https://image.tmdb.org"
+	}
+	// 用一个固定存在的小图（TMDb logo）做探活，避免 404 干扰判断
+	imgURL := imgBase + "/t/p/w92/wwemzKWzjKYJFfCeiB57q3r4Bcm.png"
+	if req, err := http.NewRequest("HEAD", imgURL, nil); err != nil {
+		imgMsg = "构造请求失败: " + err.Error()
+	} else {
+		setAPIHeaders(req)
+		resp, err := client.Do(req)
+		if err != nil {
+			imgMsg = "无法连通: " + err.Error()
+		} else {
+			defer resp.Body.Close()
+			switch {
+			case resp.StatusCode == http.StatusOK:
+				imgOK, imgMsg = true, fmt.Sprintf("可达（HTTP 200，%s）", imgBase)
+			case resp.StatusCode >= 300 && resp.StatusCode < 400:
+				imgOK, imgMsg = true, fmt.Sprintf("可达（HTTP %d 重定向，%s）", resp.StatusCode, imgBase)
+			case resp.StatusCode == http.StatusNotFound:
+				// HEAD 不被支持时通常返回 404/405，再降级为 GET
+				imgOK, imgMsg = false, fmt.Sprintf("HTTP 404（%s，资源缺失或代理不支持 HEAD）", imgBase)
+			default:
+				imgOK = resp.StatusCode < 500
+				imgMsg = fmt.Sprintf("HTTP %d（%s）", resp.StatusCode, imgBase)
+			}
+		}
+	}
+	return
+}
+
 // PingTMDb 测试 TMDb API Key 的连通性与有效性
 //
 // 参数：

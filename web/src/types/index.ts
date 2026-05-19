@@ -371,6 +371,8 @@ export interface ASRServiceStatus {
 export interface TMDbConfigStatus {
   configured: boolean
   masked_key: string
+  api_proxy?: string
+  image_proxy?: string
 }
 
 // ==================== 智能推荐 ====================
