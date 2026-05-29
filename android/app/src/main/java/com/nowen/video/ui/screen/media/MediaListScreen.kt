@@ -6,6 +6,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -14,10 +16,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Label
 import androidx.compose.material.icons.automirrored.filled.Sort
+import androidx.compose.material.icons.automirrored.filled.ViewList
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -82,6 +87,9 @@ val RATING_OPTIONS = listOf(
     RatingOption("≥9分", 9.0),
 )
 
+/** 视图模式：网格 / 列表 */
+enum class ViewMode { GRID, LIST }
+
 // ==================== 主页面 ====================
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -111,6 +119,7 @@ fun MediaListScreen(
     var sortValue by remember { mutableStateOf(SORT_OPTIONS[0]) }
     var showFilters by remember { mutableStateOf(false) }
     var showSortMenu by remember { mutableStateOf(false) }
+    var viewMode by rememberSaveable { mutableStateOf(ViewMode.GRID) }
 
     // ===== 从数据中提取所有类型标签和地区 =====
     val allGenres = remember(uiState.mixedList) {
@@ -392,6 +401,12 @@ fun MediaListScreen(
                             }
                         }
 
+                        // 视图模式切换按钮（网格 / 列表）
+                        ViewModeToggleButton(
+                            viewMode = viewMode,
+                            onModeChange = { viewMode = it }
+                        )
+
                         // 筛选按钮
                         Box {
                             FilterChipButton(
@@ -476,7 +491,7 @@ fun MediaListScreen(
                         ) {
                             // 类型标签
                             if (allGenres.isNotEmpty()) {
-                                FilterSection(title = "类型标签", icon = Icons.Default.Label) {
+                                FilterSection(title = "类型标签", icon = Icons.AutoMirrored.Filled.Label) {
                                     FlowChipRow(
                                         items = allGenres,
                                         selectedItems = selectedGenres,
@@ -638,26 +653,52 @@ fun MediaListScreen(
                             }
                         }
                     } else {
-                        LazyVerticalGrid(
-                            columns = GridCells.Adaptive(minSize = 130.dp),
-                            modifier = Modifier.fillMaxSize(),
-                            contentPadding = PaddingValues(12.dp),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            verticalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            items(filteredItems) { item ->
-                                CyberMixedGridItem(
-                                    item = item,
-                                    serverUrl = uiState.serverUrl,
-                                    token = uiState.token,
-                                    onClick = {
-                                        if (item.type == "series" && item.series != null) {
-                                            onSeriesClick(item.series.id)
-                                        } else if (item.media != null) {
-                                            onMediaClick(item.media.id)
-                                        }
+                        when (viewMode) {
+                            ViewMode.GRID -> {
+                                LazyVerticalGrid(
+                                    columns = GridCells.Fixed(2),
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentPadding = PaddingValues(12.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                                ) {
+                                    items(filteredItems) { item ->
+                                        CyberMixedGridItem(
+                                            item = item,
+                                            serverUrl = uiState.serverUrl,
+                                            token = uiState.token,
+                                            onClick = {
+                                                if (item.type == "series" && item.series != null) {
+                                                    onSeriesClick(item.series.id)
+                                                } else if (item.media != null) {
+                                                    onMediaClick(item.media.id)
+                                                }
+                                            }
+                                        )
                                     }
-                                )
+                                }
+                            }
+                            ViewMode.LIST -> {
+                                LazyColumn(
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentPadding = PaddingValues(12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    items(filteredItems) { item ->
+                                        CyberMixedListItem(
+                                            item = item,
+                                            serverUrl = uiState.serverUrl,
+                                            token = uiState.token,
+                                            onClick = {
+                                                if (item.type == "series" && item.series != null) {
+                                                    onSeriesClick(item.series.id)
+                                                } else if (item.media != null) {
+                                                    onMediaClick(item.media.id)
+                                                }
+                                            }
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
@@ -1006,6 +1047,288 @@ private fun CyberMixedGridItem(
             }
         }
     }
+}
+
+// ==================== 视图模式切换按钮 ====================
+
+/** 网格 / 列表 视图模式切换 —— 双按钮直接选择当前展示方式 */
+@Composable
+private fun ViewModeToggleButton(
+    viewMode: ViewMode,
+    onModeChange: (ViewMode) -> Unit
+) {
+    val colorScheme = MaterialTheme.colorScheme
+    val isDark = isSystemInDarkTheme()
+
+    Row(
+        modifier = Modifier
+            .height(40.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(
+                if (isDark) colorScheme.surfaceContainerHigh.copy(alpha = 0.75f)
+                else colorScheme.surfaceContainerLow
+            )
+            .border(
+                1.dp,
+                if (isDark) colorScheme.primary.copy(alpha = 0.12f)
+                else colorScheme.outline.copy(alpha = 0.35f),
+                RoundedCornerShape(12.dp)
+            )
+            .padding(3.dp),
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        ViewModeSegment(
+            selected = viewMode == ViewMode.GRID,
+            icon = Icons.Default.GridView,
+            contentDescription = "网格模式",
+            onClick = { onModeChange(ViewMode.GRID) }
+        )
+        ViewModeSegment(
+            selected = viewMode == ViewMode.LIST,
+            icon = Icons.AutoMirrored.Filled.ViewList,
+            contentDescription = "列表模式",
+            onClick = { onModeChange(ViewMode.LIST) }
+        )
+    }
+}
+
+@Composable
+private fun ViewModeSegment(
+    selected: Boolean,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    contentDescription: String,
+    onClick: () -> Unit
+) {
+    val colorScheme = MaterialTheme.colorScheme
+    Box(
+        modifier = Modifier
+            .size(30.dp)
+            .clip(RoundedCornerShape(9.dp))
+            .background(
+                if (selected) colorScheme.primary.copy(alpha = 0.18f)
+                else Color.Transparent
+            )
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = contentDescription,
+            tint = if (selected) colorScheme.primary else colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(17.dp)
+        )
+    }
+}
+
+// ==================== 列表模式卡片 ====================
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun CyberMixedListItem(
+    item: MixedItem,
+    serverUrl: String,
+    token: String,
+    onClick: () -> Unit
+) {
+    val colorScheme = MaterialTheme.colorScheme
+
+    val title: String
+    val origTitle: String
+    val year: Int
+    val rating: Double
+    val posterUrl: String
+    val resolution: String
+    val overview: String
+    val genres: String
+    val country: String
+    // 右下角徽标：电影显示时长，剧集显示集数
+    val metaBadge: String?
+    val typeLabel: String
+    val typeColor: Color
+
+    if (item.type == "series" && item.series != null) {
+        val series = item.series
+        title = series.title
+        origTitle = series.origTitle
+        year = series.year
+        rating = series.rating
+        posterUrl = "$serverUrl/api/series/${series.id}/poster?token=$token"
+        resolution = ""
+        overview = series.overview
+        genres = series.genres
+        country = series.country
+        metaBadge = if (series.episodeCount > 0) "${series.episodeCount} 集" else null
+        typeLabel = "剧集"
+        typeColor = colorScheme.tertiary
+    } else if (item.media != null) {
+        val media = item.media
+        title = media.title
+        origTitle = media.origTitle
+        year = media.year
+        rating = media.rating
+        posterUrl = "$serverUrl/api/media/${media.id}/poster?token=$token"
+        resolution = media.resolution
+        overview = media.overview
+        genres = media.genres
+        country = media.country
+        metaBadge = if (media.runtime > 0) "${media.runtime} 分钟" else null
+        typeLabel = "电影"
+        typeColor = NeonPurple
+    } else {
+        return
+    }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(132.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .cyberCard(cornerRadius = 14.dp)
+            .clickable(onClick = onClick)
+            .padding(9.dp),
+        verticalAlignment = Alignment.Top
+    ) {
+        // ---- 左侧海报，保持 2:3 比例，列表模式也突出封面 ----
+        Box(
+            modifier = Modifier
+                .width(76.dp)
+                .fillMaxHeight()
+                .clip(RoundedCornerShape(9.dp))
+        ) {
+            AsyncImage(
+                model = posterUrl,
+                contentDescription = title,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop
+            )
+            // 评分角标
+            if (rating > 0) {
+                Surface(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(3.dp),
+                    shape = RoundedCornerShape(5.dp),
+                    color = colorScheme.scrim.copy(alpha = 0.75f)
+                ) {
+                    Text(
+                        text = String.format("%.1f", rating),
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                        color = AmberGold,
+                        fontSize = 9.sp,
+                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.width(10.dp))
+
+        // ---- 右侧信息 ----
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxHeight(),
+            verticalArrangement = Arrangement.SpaceBetween
+        ) {
+            // 标题 + 原名
+            Column {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
+                    color = colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                if (origTitle.isNotBlank() && origTitle != title) {
+                    Text(
+                        text = origTitle,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = colorScheme.outline,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+
+            // 简介
+            if (overview.isNotBlank()) {
+                Text(
+                    text = overview,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    lineHeight = 14.sp
+                )
+            }
+
+            // 元信息：类型 + 年份 + 国家 + 时长/集数 + 分辨率，窄屏下自动换行
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                // 类型徽章（电影 / 剧集）
+                Surface(
+                    shape = RoundedCornerShape(4.dp),
+                    color = typeColor.copy(alpha = 0.15f),
+                    border = androidx.compose.foundation.BorderStroke(
+                        1.dp, typeColor.copy(alpha = 0.4f)
+                    )
+                ) {
+                    Text(
+                        text = typeLabel,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = typeColor,
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                    )
+                }
+                if (year > 0) {
+                    MetaText(text = "$year")
+                }
+                if (country.isNotBlank()) {
+                    MetaText(text = country.split(",").firstOrNull()?.trim().orEmpty())
+                }
+                if (metaBadge != null) {
+                    MetaText(text = metaBadge)
+                }
+                if (resolution.isNotBlank()) {
+                    Surface(
+                        shape = RoundedCornerShape(4.dp),
+                        color = colorScheme.tertiary.copy(alpha = 0.15f),
+                        border = androidx.compose.foundation.BorderStroke(
+                            1.dp, colorScheme.tertiary.copy(alpha = 0.35f)
+                        )
+                    ) {
+                        Text(
+                            text = resolution,
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Medium),
+                            color = colorScheme.tertiary,
+                            fontSize = 9.sp,
+                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                        )
+                    }
+                }
+                // 类型标签（取首个，避免拥挤）
+                val firstGenre = genres.split(",").firstOrNull()?.trim().orEmpty()
+                if (firstGenre.isNotBlank()) {
+                    MetaText(text = firstGenre)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MetaText(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.outline,
+        fontSize = 10.sp
+    )
 }
 
 // ==================== ViewModel ====================

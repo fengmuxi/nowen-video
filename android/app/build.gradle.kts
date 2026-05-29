@@ -1,3 +1,5 @@
+import java.io.ByteArrayOutputStream
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -7,6 +9,38 @@ plugins {
     alias(libs.plugins.ksp)
 }
 
+fun String.normalizedAppVersion(): String? {
+    val cleaned = removePrefix("refs/tags/").removePrefix("v").trim()
+    return cleaned.takeIf { it.matches(Regex("^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?$")) }
+}
+
+fun gitTagVersion(): String? = runCatching {
+    val output = ByteArrayOutputStream()
+    exec {
+        commandLine("git", "describe", "--tags", "--abbrev=0", "--match", "v[0-9]*")
+        standardOutput = output
+        isIgnoreExitValue = true
+    }
+    output.toString().normalizedAppVersion()
+}.getOrNull()
+
+fun resolveAppVersion(): String = listOfNotNull(
+    System.getenv("NOWEN_VERSION"),
+    System.getenv("APP_VERSION"),
+    System.getenv("GITHUB_REF_NAME"),
+    gitTagVersion()
+).firstNotNullOfOrNull { it.normalizedAppVersion() } ?: "0.1.0"
+
+fun appVersionCode(version: String): Int {
+    val base = version.substringBefore('-').split('.').map { it.toIntOrNull() ?: 0 }
+    val major = base.getOrElse(0) { 0 }.coerceIn(0, 999)
+    val minor = base.getOrElse(1) { 0 }.coerceIn(0, 999)
+    val patch = base.getOrElse(2) { 0 }.coerceIn(0, 999)
+    return major * 1_000_000 + minor * 1_000 + patch
+}
+
+val appVersionName = resolveAppVersion()
+
 android {
     namespace = "com.nowen.video"
     compileSdk = 35
@@ -15,8 +49,8 @@ android {
         applicationId = "com.nowen.video"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = appVersionCode(appVersionName)
+        versionName = appVersionName
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

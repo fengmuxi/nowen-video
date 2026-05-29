@@ -12,6 +12,7 @@ import (
 	"github.com/nowen-video/nowen-video/internal/model"
 	"github.com/nowen-video/nowen-video/internal/repository"
 	"github.com/nowen-video/nowen-video/internal/service"
+	"github.com/nowen-video/nowen-video/internal/version"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
@@ -348,7 +349,7 @@ func (h *AdminHandler) SystemInfo(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"data": gin.H{
-			"version":    "0.1.0",
+			"version":    version.Current(),
 			"go_version": runtime.Version(),
 			"os":         runtime.GOOS,
 			"arch":       runtime.GOARCH,

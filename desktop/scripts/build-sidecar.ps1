@@ -1,4 +1,3 @@
-
 # 构建 Go sidecar 二进制供 Tauri 桌面端使用
 #
 # 用法:
@@ -18,11 +17,35 @@ $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $DesktopRoot = Split-Path -Parent $ScriptRoot
 $ProjectRoot = Split-Path -Parent $DesktopRoot
 
+function Normalize-Version([string]$Raw) {
+    if ([string]::IsNullOrWhiteSpace($Raw)) { return $null }
+    $value = $Raw.Trim() -replace '^refs/tags/', '' -replace '^v', ''
+    if ($value -match '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$') { return $value }
+    return $null
+}
+
+function Resolve-AppVersion {
+    foreach ($candidate in @($env:NOWEN_VERSION, $env:APP_VERSION, $env:GITHUB_REF_NAME)) {
+        $normalized = Normalize-Version $candidate
+        if ($normalized) { return $normalized }
+    }
+    $tag = (& git -C $ProjectRoot describe --tags --abbrev=0 --match "v[0-9]*" 2>$null)
+    if ($LASTEXITCODE -eq 0) {
+        $normalized = Normalize-Version $tag
+        if ($normalized) { return $normalized }
+    }
+    return "0.1.0"
+}
+
+$AppVersion = Resolve-AppVersion
+$env:NOWEN_VERSION = $AppVersion
+
 Write-Host "=====================================" -ForegroundColor Cyan
 Write-Host " 构建 nowen-video Go sidecar"          -ForegroundColor Cyan
 Write-Host "=====================================" -ForegroundColor Cyan
 Write-Host "项目根: $ProjectRoot"
 Write-Host "产物目录: $DesktopRoot\bin"
+Write-Host "应用版本: $AppVersion"
 Write-Host ""
 
 # 确保 bin 目录存在
@@ -55,9 +78,9 @@ $OutName = "nowen-video-$Triple$Ext"
 $OutPath = Join-Path $BinDir $OutName
 
 # 构建参数
-$BuildArgs = @("build", "-o", $OutPath)
+$VersionPackage = "github.com/nowen-video/nowen-video/internal/version.Version"
+$BuildArgs = @("build", "-ldflags", "-s -w -X $VersionPackage=$AppVersion", "-o", $OutPath)
 if ($Production) {
-    $BuildArgs += @("-ldflags", "-s -w -X main.Version=desktop-$(Get-Date -Format yyyyMMdd)")
     $BuildArgs += @("-trimpath")
 }
 $BuildArgs += "./cmd/server"

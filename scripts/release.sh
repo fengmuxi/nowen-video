@@ -417,6 +417,7 @@ if [ "$MULTIARCH" = "1" ]; then
         docker buildx build
         --platform "$PLATFORMS"
         -f "$REPO_ROOT/Dockerfile"
+        --build-arg "NOWEN_VERSION=$VERSION"
         "${BUILD_TAGS[@]}"
         "${OCI_LABELS[@]}"
         --push
@@ -447,7 +448,7 @@ else
     step "开始构建（单架构）"
     # 明确 -f Dockerfile 与上下文路径 "$REPO_ROOT"，避免个别环境下 docker build 被
     # 劫持为 buildx bake 模式时无法正确定位 Dockerfile
-    BUILD_CMD=( docker build -f "$REPO_ROOT/Dockerfile" "${BUILD_TAGS[@]}" "${OCI_LABELS[@]}" "$REPO_ROOT" )
+    BUILD_CMD=( docker build -f "$REPO_ROOT/Dockerfile" --build-arg "NOWEN_VERSION=$VERSION" "${BUILD_TAGS[@]}" "${OCI_LABELS[@]}" "$REPO_ROOT" )
     echo "  ${BUILD_CMD[*]}"
 
     BUILD_START=$(date +%s)

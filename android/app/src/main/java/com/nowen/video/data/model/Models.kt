@@ -409,3 +409,66 @@ data class PaginatedResponse<T>(
     val page: Int = 1,
     val size: Int = 20
 )
+
+// ==================== 移动端能力 / 健康检查 ====================
+
+@Serializable
+data class ServerHealth(
+    val status: String = "unknown",
+    val version: String = "",
+    @SerialName("server_name") val serverName: String = "nowen-video",
+    val go: String = "",
+    val os: String = "",
+    val arch: String = "",
+    val port: Int = 0,
+    @SerialName("listen_addr") val listenAddr: String = "",
+    @SerialName("lan_ips") val lanIps: List<String> = emptyList(),
+    val features: ServerFeatures = ServerFeatures()
+)
+
+@Serializable
+data class ServerFeatures(
+    @SerialName("emby_compat") val embyCompat: Boolean = false,
+    @SerialName("emby_discovery") val embyDiscovery: Boolean = false,
+    @SerialName("ai_enabled") val aiEnabled: Boolean = false,
+    @SerialName("smart_search") val smartSearch: Boolean = false,
+    @SerialName("recommend_reason") val recommendReason: Boolean = false,
+    @SerialName("metadata_enhance") val metadataEnhance: Boolean = false,
+    @SerialName("webdav") val webdav: Boolean = false,
+    @SerialName("alist") val alist: Boolean = false,
+    @SerialName("s3") val s3: Boolean = false,
+    @SerialName("strm_hls_rewrite") val strmHlsRewrite: Boolean = false
+)
+
+// ==================== 离线下载 ====================
+
+@Serializable
+data class DownloadTask(
+    val id: String = "",
+    @SerialName("user_id") val userId: String = "",
+    @SerialName("media_id") val mediaId: String = "",
+    val title: String = "",
+    val quality: String = "original",
+    val status: String = "queued",
+    val progress: Double = 0.0,
+    @SerialName("file_size") val fileSize: Long = 0,
+    val downloaded: Long = 0,
+    @SerialName("output_path") val outputPath: String = "",
+    val speed: Long = 0,
+    val eta: Int = 0,
+    val error: String = "",
+    val priority: Int = 0,
+    @SerialName("expires_at") val expiresAt: String? = null,
+    @SerialName("created_at") val createdAt: String = "",
+    @SerialName("updated_at") val updatedAt: String = ""
+)
+
+@Serializable
+data class DownloadQueueInfo(
+    val active: Int = 0,
+    val queued: Int = 0,
+    val completed: Int = 0,
+    val failed: Int = 0,
+    @SerialName("total_size") val totalSize: Long = 0,
+    val tasks: List<DownloadTask> = emptyList()
+)

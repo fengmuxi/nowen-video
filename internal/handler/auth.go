@@ -5,6 +5,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/nowen-video/nowen-video/internal/service"
+	"github.com/nowen-video/nowen-video/internal/version"
 	"go.uber.org/zap"
 )
 
@@ -58,9 +59,9 @@ func (h *AuthHandler) Status(c *gin.Context) {
 			"registration_open": status.RegistrationOpen,
 			"invite_required":   status.InviteRequired,
 			// 服务器身份信息（供局域网发现识别）
-			"server_name":  serverName,
-			"server_type":  "nowen-video",
-			"version":      "0.1.0",
+			"server_name": serverName,
+			"server_type": "nowen-video",
+			"version":     version.Current(),
 		},
 	})
 }

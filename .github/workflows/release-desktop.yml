@@ -86,10 +86,10 @@ jobs:
         with:
           workspaces: desktop/src-tauri -> target
 
-      - name: Setup Go 1.22
+      - name: Setup Go 1.25
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: '1.25'
           cache: true
 
       - name: Download resources artifact
@@ -97,6 +97,18 @@ jobs:
         with:
           name: desktop-resources
           path: desktop/src-tauri/resources
+
+      - name: Resolve app version
+        shell: pwsh
+        run: |
+          $version = if ('${{ github.ref_type }}' -eq 'tag') { '${{ github.ref_name }}' } else { '0.1.0' }
+          $version = $version -replace '^v',''
+          "NOWEN_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "APP_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
+          pwsh -ExecutionPolicy Bypass -File ./scripts/sync-version.ps1 -Version $version
+
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version "^2.0" --locked
 
       # ---- 构建后端 sidecar ----
       - name: Build Go sidecar
@@ -107,12 +119,13 @@ jobs:
           Write-Host "Target triple: $triple"
           $outDir = "desktop/src-tauri/bin"
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+          $versionPackage = "github.com/nowen-video/nowen-video/internal/version.Version"
           if ($env:RUNNER_OS -eq 'Windows') {
             $env:GOOS = 'windows'
             $env:GOARCH = 'amd64'
-            go build -ldflags "-s -w" -o "$outDir/nowen-video-server-$triple.exe" ./cmd/server
+            go build -ldflags "-s -w -X $versionPackage=$env:NOWEN_VERSION" -o "$outDir/nowen-video-server-$triple.exe" ./cmd/server
           } else {
-            go build -ldflags "-s -w" -o "$outDir/nowen-video-server-$triple" ./cmd/server
+            go build -ldflags "-s -w -X $versionPackage=$env:NOWEN_VERSION" -o "$outDir/nowen-video-server-$triple" ./cmd/server
           }
           Get-ChildItem $outDir
 
@@ -124,18 +137,18 @@ jobs:
       - name: Build web bundle
         working-directory: web
         run: npm run build
+        env:
+          VITE_APP_VERSION: ${{ env.NOWEN_VERSION }}
 
       # ---- 桌面端打包 ----
-      - name: Install desktop deps
-        working-directory: desktop
-        run: npm ci
-
       - name: Tauri build
-        working-directory: desktop
+        working-directory: desktop/src-tauri
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: npm run tauri build -- --bundles ${{ matrix.bundles }}
+          NOWEN_VERSION: ${{ env.NOWEN_VERSION }}
+          APP_VERSION: ${{ env.NOWEN_VERSION }}
+        run: cargo tauri build --bundles ${{ matrix.bundles }}
 
       - name: Upload bundle
         uses: actions/upload-artifact@v4

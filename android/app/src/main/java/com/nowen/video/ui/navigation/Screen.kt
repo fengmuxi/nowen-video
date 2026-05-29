@@ -67,4 +67,28 @@ sealed class Screen(val route: String) {
 
     /** 实时通知（后台任务） */
     data object Notifications : Screen("notifications")
+
+    /** 连接诊断 */
+    data object ConnectionDiagnostic : Screen("connection_diagnostic")
+
+    /** 离线下载 */
+    data object Downloads : Screen("downloads")
+
+    /** 字幕中心 */
+    data object SubtitleCenter : Screen("subtitle_center")
+
+    /** 智能发现 / AI 搜索 */
+    data object SmartDiscovery : Screen("smart_discovery")
+
+    /** 远程访问 */
+    data object RemoteAccess : Screen("remote_access")
+
+    /** 投屏与遥控 */
+    data object Cast : Screen("cast")
+
+    /** 家庭与儿童模式 */
+    data object FamilyMode : Screen("family_mode")
+
+    /** 设备适配 */
+    data object DeviceAdaptation : Screen("device_adaptation")
 }

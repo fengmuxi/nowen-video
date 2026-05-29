@@ -26,6 +26,7 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.nowen.video.BuildConfig
 import com.nowen.video.data.local.ThemeMode
 import com.nowen.video.data.local.ThemePreferences
 import com.nowen.video.data.local.TokenManager
@@ -49,6 +50,14 @@ fun SettingsScreen(
     onPlayerSettings: () -> Unit = {},
     onServerManage: () -> Unit = {},
     onNotifications: () -> Unit = {},
+    onConnectionDiagnostic: () -> Unit = {},
+    onDownloads: () -> Unit = {},
+    onSubtitleCenter: () -> Unit = {},
+    onSmartDiscovery: () -> Unit = {},
+    onRemoteAccess: () -> Unit = {},
+    onCast: () -> Unit = {},
+    onFamilyMode: () -> Unit = {},
+    onDeviceAdaptation: () -> Unit = {},
     onBack: () -> Unit,
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
@@ -226,6 +235,102 @@ WSConnectionState.CONNECTED -> MaterialTheme.colorScheme.tertiary
                     }
                 }
 
+                // ==================== 移动端阶段功能 ====================
+                Text(
+                    "移动端能力",
+                    style = MaterialTheme.typography.labelMedium.copy(
+                        letterSpacing = 2.sp,
+                        fontWeight = FontWeight.Bold
+                    ),
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
+                )
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .glassMorphism(cornerRadius = 14.dp)
+                ) {
+                    Column {
+                        CyberSettingsItem(
+                            icon = Icons.Default.HealthAndSafety,
+                            iconColor = MaterialTheme.colorScheme.tertiary,
+                            title = "连接诊断",
+                            subtitle = "检查地址、端口、健康接口和局域网信息",
+                            onClick = onConnectionDiagnostic
+                        )
+
+                        CyberDivider()
+
+                        CyberSettingsItem(
+                            icon = Icons.Default.Download,
+                            iconColor = MaterialTheme.colorScheme.primary,
+                            title = "离线下载",
+                            subtitle = "查看下载队列、暂停、继续和删除任务",
+                            onClick = onDownloads
+                        )
+
+                        CyberDivider()
+
+                        CyberSettingsItem(
+                            icon = Icons.Default.Subtitles,
+                            iconColor = MaterialTheme.colorScheme.secondary,
+                            title = "字幕中心",
+                            subtitle = "AI 字幕、在线字幕、翻译与任务状态",
+                            onClick = onSubtitleCenter
+                        )
+
+                        CyberDivider()
+
+                        CyberSettingsItem(
+                            icon = Icons.Default.AutoAwesome,
+                            iconColor = AmberGold,
+                            title = "智能发现",
+                            subtitle = "推荐、相似内容与自然语言搜索",
+                            onClick = onSmartDiscovery
+                        )
+
+                        CyberDivider()
+
+                        CyberSettingsItem(
+                            icon = Icons.Default.TravelExplore,
+                            iconColor = MaterialTheme.colorScheme.primary,
+                            title = "远程访问",
+                            subtitle = "局域网、公网地址、HTTPS 与扫码配对规划",
+                            onClick = onRemoteAccess
+                        )
+
+                        CyberDivider()
+
+                        CyberSettingsItem(
+                            icon = Icons.Default.Cast,
+                            iconColor = MaterialTheme.colorScheme.secondary,
+                            title = "投屏与遥控",
+                            subtitle = "DLNA / Chromecast 与手机遥控器入口",
+                            onClick = onCast
+                        )
+
+                        CyberDivider()
+
+                        CyberSettingsItem(
+                            icon = Icons.Default.FamilyRestroom,
+                            iconColor = MaterialTheme.colorScheme.tertiary,
+                            title = "家庭与儿童模式",
+                            subtitle = "儿童模式、家长 PIN 与权限联动入口",
+                            onClick = onFamilyMode
+                        )
+
+                        CyberDivider()
+
+                        CyberSettingsItem(
+                            icon = Icons.Default.Devices,
+                            iconColor = MaterialTheme.colorScheme.outline,
+                            title = "设备适配",
+                            subtitle = "手机、平板、Android TV 布局建议与识别",
+                            onClick = onDeviceAdaptation
+                        )
+                    }
+                }
+
                 // ==================== 外观设置 ====================
                 Text(
                     "外观",
@@ -267,7 +372,7 @@ WSConnectionState.CONNECTED -> MaterialTheme.colorScheme.tertiary
                             icon = Icons.Default.Info,
                             iconColor = MaterialTheme.colorScheme.outline,
                             title = "应用版本",
-                            subtitle = "1.0.0",
+                            subtitle = BuildConfig.VERSION_NAME,
                             showChevron = false
                         )
                     }

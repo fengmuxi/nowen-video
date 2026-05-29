@@ -21,9 +21,35 @@ $ScriptRoot  = Split-Path -Parent $MyInvocation.MyCommand.Path
 $DesktopRoot = Split-Path -Parent $ScriptRoot
 $ProjectRoot = Split-Path -Parent $DesktopRoot
 
+function Normalize-Version([string]$Raw) {
+    if ([string]::IsNullOrWhiteSpace($Raw)) { return $null }
+    $value = $Raw.Trim() -replace '^refs/tags/', '' -replace '^v', ''
+    if ($value -match '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$') { return $value }
+    return $null
+}
+
+function Resolve-AppVersion {
+    foreach ($candidate in @($env:NOWEN_VERSION, $env:APP_VERSION, $env:GITHUB_REF_NAME)) {
+        $normalized = Normalize-Version $candidate
+        if ($normalized) { return $normalized }
+    }
+    $tag = (& git -C $ProjectRoot describe --tags --abbrev=0 --match "v[0-9]*" 2>$null)
+    if ($LASTEXITCODE -eq 0) {
+        $normalized = Normalize-Version $tag
+        if ($normalized) { return $normalized }
+    }
+    return "0.1.0"
+}
+
+$AppVersion = Resolve-AppVersion
+$env:NOWEN_VERSION = $AppVersion
+$env:APP_VERSION = $AppVersion
+$env:VITE_APP_VERSION = $AppVersion
+
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host " nowen-video Desktop dev launcher"           -ForegroundColor Cyan
 Write-Host "============================================" -ForegroundColor Cyan
+Write-Host "Version: $AppVersion" -ForegroundColor DarkGray
 
 # Step 1: build Go sidecar if missing or forced
 $BinDir = Join-Path $DesktopRoot "bin"
@@ -55,9 +81,10 @@ if (-not (Test-Path (Join-Path $WebRoot "node_modules"))) {
     Pop-Location
 }
 
-$viteJob = Start-Job -ArgumentList $WebRoot -ScriptBlock {
-    param($web)
+$viteJob = Start-Job -ArgumentList $WebRoot, $AppVersion -ScriptBlock {
+    param($web, $version)
     Set-Location $web
+    $env:VITE_APP_VERSION = $version
     npm run dev
 }
 Write-Host "  Vite job started (Job ID: $($viteJob.Id))" -ForegroundColor DarkGray

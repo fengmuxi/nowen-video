@@ -1,5 +1,13 @@
 /// <reference types="vite/client" />
 
+interface ImportMetaEnv {
+  readonly VITE_APP_VERSION?: string
+}
+
+interface ImportMeta {
+  readonly env: ImportMetaEnv
+}
+
 /**
  * mp4box.js 类型声明（npm 包自带的类型不完整）
  */

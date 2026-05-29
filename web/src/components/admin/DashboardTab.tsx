@@ -24,6 +24,8 @@ import {
 } from 'lucide-react'
 import { adminApi } from '@/api'
 
+const webAppVersion = import.meta.env.VITE_APP_VERSION || '0.1.0'
+
 interface DashboardTabProps {
   systemInfo: SystemInfo | null
   sysSettings: SystemSettings
@@ -363,7 +365,7 @@ export default function DashboardTab({
                 <span className="text-xs">版本</span>
               </div>
               <p className="mt-2 font-display text-lg font-bold tracking-wide" style={{ color: 'var(--text-primary)' }}>v{systemInfo.version}</p>
-              <p className="text-xs text-surface-500">{systemInfo.go_version} / {systemInfo.os}_{systemInfo.arch}</p>
+              <p className="text-xs text-surface-500">Web v{webAppVersion} · {systemInfo.go_version} / {systemInfo.os}_{systemInfo.arch}</p>
             </div>
           </div>
         </section>

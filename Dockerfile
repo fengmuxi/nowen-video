@@ -16,10 +16,12 @@
 # 阶段1: 构建前端（锁定在构建机本地架构，避免 QEMU 跑 npm 极慢）
 # =============================================
 FROM --platform=$BUILDPLATFORM node:20-alpine AS frontend
+ARG NOWEN_VERSION=0.1.0
 WORKDIR /app/web
 COPY web/package*.json ./
 RUN npm ci
 COPY web/ .
+ENV VITE_APP_VERSION=${NOWEN_VERSION}
 RUN npm run build
 
 # =============================================
@@ -30,6 +32,7 @@ RUN npm run build
 FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS backend
 ARG TARGETOS
 ARG TARGETARCH
+ARG NOWEN_VERSION=0.1.0
 WORKDIR /app
 # 使用国内 Go 模块代理（proxy.golang.org 国内不可达），direct 兜底私有/缺失模块
 ENV GOPROXY=https://goproxy.cn,https://goproxy.io,direct
@@ -39,13 +42,14 @@ COPY . .
 COPY --from=frontend /app/web/dist ./web/dist
 # 使用纯 Go SQLite (glebarez/sqlite)，可以 CGO_ENABLED=0 直接交叉编译
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
-    go build -trimpath -ldflags="-s -w" -o nowen-video ./cmd/server
+    go build -trimpath -ldflags="-s -w -X github.com/nowen-video/nowen-video/internal/version.Version=${NOWEN_VERSION}" -o nowen-video ./cmd/server
 
 # =============================================
 # 阶段3: 运行镜像（目标架构的 alpine）
 # =============================================
 FROM alpine:3.19
 ARG TARGETARCH
+ARG NOWEN_VERSION=0.1.0
 
 # ---- 基础依赖（全架构通用） ----
 RUN apk add --no-cache \
@@ -120,6 +124,7 @@ ENV NOWEN_APP_WEB_DIR=/app/web/dist
 ENV NOWEN_DATABASE_DB_PATH=/data/nowen.db
 ENV NOWEN_CACHE_CACHE_DIR=/cache
 ENV NOWEN_LOGGING_LEVEL=info
+ENV NOWEN_VERSION=${NOWEN_VERSION}
 # ---- 番号刮削 / Python 微服务默认值（容器内开箱即用） ----
 # 总开关默认关（避免无 NSFW 需求的用户被动加载）；开启方式：设置为 true
 ENV NOWEN_ADULT_SCRAPER_ENABLED=false

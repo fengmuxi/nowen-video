@@ -13,6 +13,11 @@ import retrofit2.http.*
  */
 interface NowenApiService {
 
+    // ==================== 健康检查（公开） ====================
+
+    @GET("health")
+    suspend fun getHealth(): ApiResponse<ServerHealth>
+
     // ==================== 认证（公开） ====================
     // 登录/注册直接返回 TokenResponse（不包裹在 data 中）
 
@@ -233,4 +238,24 @@ interface NowenApiService {
 
     @GET("recommend/similar/{mediaId}")
     suspend fun getSimilarMedia(@Path("mediaId") mediaId: String): ApiResponse<List<Media>>
+
+    // ==================== 离线下载（管理员） ====================
+
+    @GET("admin/downloads")
+    suspend fun getDownloads(@Query("status") status: String? = null): ApiResponse<List<DownloadTask>>
+
+    @GET("admin/downloads/queue")
+    suspend fun getDownloadQueueInfo(): ApiResponse<DownloadQueueInfo>
+
+    @POST("admin/downloads/{id}/pause")
+    suspend fun pauseDownload(@Path("id") id: String)
+
+    @POST("admin/downloads/{id}/resume")
+    suspend fun resumeDownload(@Path("id") id: String)
+
+    @POST("admin/downloads/{id}/cancel")
+    suspend fun cancelDownload(@Path("id") id: String)
+
+    @DELETE("admin/downloads/{id}")
+    suspend fun deleteDownload(@Path("id") id: String)
 }

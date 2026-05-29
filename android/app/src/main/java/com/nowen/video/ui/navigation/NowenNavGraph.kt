@@ -15,6 +15,14 @@ import com.nowen.video.ui.screen.auth.ServerSetupScreen
 import com.nowen.video.ui.screen.collection.CollectionDetailScreen
 import com.nowen.video.ui.screen.collection.CollectionListScreen
 import com.nowen.video.ui.screen.favorites.FavoritesScreen
+import com.nowen.video.ui.screen.features.CastScreen
+import com.nowen.video.ui.screen.features.ConnectionDiagnosticScreen
+import com.nowen.video.ui.screen.features.DeviceAdaptationScreen
+import com.nowen.video.ui.screen.features.DownloadsScreen
+import com.nowen.video.ui.screen.features.FamilyModeScreen
+import com.nowen.video.ui.screen.features.RemoteAccessScreen
+import com.nowen.video.ui.screen.features.SmartDiscoveryScreen
+import com.nowen.video.ui.screen.features.SubtitleCenterScreen
 import com.nowen.video.ui.screen.history.HistoryScreen
 import com.nowen.video.ui.screen.media.MediaDetailScreen
 import com.nowen.video.ui.screen.media.MediaListScreen
@@ -360,6 +368,30 @@ fun NowenNavGraph(
                 onNotifications = {
                     navController.navigate(Screen.Notifications.route)
                 },
+                onConnectionDiagnostic = {
+                    navController.navigate(Screen.ConnectionDiagnostic.route)
+                },
+                onDownloads = {
+                    navController.navigate(Screen.Downloads.route)
+                },
+                onSubtitleCenter = {
+                    navController.navigate(Screen.SubtitleCenter.route)
+                },
+                onSmartDiscovery = {
+                    navController.navigate(Screen.SmartDiscovery.route)
+                },
+                onRemoteAccess = {
+                    navController.navigate(Screen.RemoteAccess.route)
+                },
+                onCast = {
+                    navController.navigate(Screen.Cast.route)
+                },
+                onFamilyMode = {
+                    navController.navigate(Screen.FamilyMode.route)
+                },
+                onDeviceAdaptation = {
+                    navController.navigate(Screen.DeviceAdaptation.route)
+                },
                 onBack = { navController.popBackStack() }
             )
         }
@@ -391,6 +423,41 @@ fun NowenNavGraph(
             NotificationScreen(
                 onBack = { navController.popBackStack() }
             )
+        }
+
+        composable(Screen.ConnectionDiagnostic.route) {
+            ConnectionDiagnosticScreen(onBack = { navController.popBackStack() })
+        }
+
+        composable(Screen.Downloads.route) {
+            DownloadsScreen(onBack = { navController.popBackStack() })
+        }
+
+        composable(Screen.SubtitleCenter.route) {
+            SubtitleCenterScreen(onBack = { navController.popBackStack() })
+        }
+
+        composable(Screen.SmartDiscovery.route) {
+            SmartDiscoveryScreen(
+                onBack = { navController.popBackStack() },
+                onMediaClick = { mediaId -> navController.navigate(Screen.MediaDetail.createRoute(mediaId)) }
+            )
+        }
+
+        composable(Screen.RemoteAccess.route) {
+            RemoteAccessScreen(onBack = { navController.popBackStack() })
+        }
+
+        composable(Screen.Cast.route) {
+            CastScreen(onBack = { navController.popBackStack() })
+        }
+
+        composable(Screen.FamilyMode.route) {
+            FamilyModeScreen(onBack = { navController.popBackStack() })
+        }
+
+        composable(Screen.DeviceAdaptation.route) {
+            DeviceAdaptationScreen(onBack = { navController.popBackStack() })
         }
     }
 }

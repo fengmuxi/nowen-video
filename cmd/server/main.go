@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -18,6 +19,7 @@ import (
 	"github.com/nowen-video/nowen-video/internal/model"
 	"github.com/nowen-video/nowen-video/internal/repository"
 	"github.com/nowen-video/nowen-video/internal/service"
+	"github.com/nowen-video/nowen-video/internal/version"
 
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
@@ -27,6 +29,8 @@ import (
 )
 
 func main() {
+	appVer := version.Current()
+
 	// 加载配置
 	cfg, err := config.Load()
 	if err != nil {
@@ -186,7 +190,7 @@ func main() {
 			Level:   model.LogLevelInfo,
 			Message: "服务启动",
 			Source:  "startup",
-			Detail:  fmt.Sprintf("版本: 0.1.0, Go: %s, OS: %s/%s", runtime.Version(), runtime.GOOS, runtime.GOARCH),
+			Detail:  fmt.Sprintf("版本: %s, Go: %s, OS: %s/%s", appVer, runtime.Version(), runtime.GOOS, runtime.GOARCH),
 		})
 	}()
 
@@ -200,12 +204,42 @@ func main() {
 
 	// 桌面端健康检查（公开，供 Tauri 壳健康探测）
 	r.GET("/api/health", func(c *gin.Context) {
+		features := gin.H{
+			"emby_compat":      true,
+			"emby_discovery":   cfg.Emby.EnableAutoDiscovery,
+			"ai_enabled":       cfg.AI.Enabled,
+			"smart_search":     cfg.AI.EnableSmartSearch,
+			"recommend_reason": cfg.AI.EnableRecommendReason,
+			"metadata_enhance": cfg.AI.EnableMetadataEnhance,
+			"webdav":           cfg.Storage.WebDAV.Enabled,
+			"alist":            cfg.Storage.Alist.Enabled,
+			"s3":               cfg.Storage.S3.Enabled,
+			"strm_hls_rewrite": cfg.STRM.RewriteHLS,
+		}
+		health := gin.H{
+			"status":      "ok",
+			"version":     appVer,
+			"server_name": cfg.Emby.ServerName,
+			"go":          runtime.Version(),
+			"os":          runtime.GOOS,
+			"arch":        runtime.GOARCH,
+			"port":        cfg.App.Port,
+			"listen_addr": fmt.Sprintf(":%d", cfg.App.Port),
+			"lan_ips":     getLocalIPv4Addresses(),
+			"features":    features,
+		}
 		c.JSON(200, gin.H{
-			"status":  "ok",
-			"version": "0.1.0",
-			"go":      runtime.Version(),
-			"os":      runtime.GOOS,
-			"arch":    runtime.GOARCH,
+			"status":      health["status"],
+			"version":     health["version"],
+			"server_name": health["server_name"],
+			"go":          health["go"],
+			"os":          health["os"],
+			"arch":        health["arch"],
+			"port":        health["port"],
+			"listen_addr": health["listen_addr"],
+			"lan_ips":     health["lan_ips"],
+			"features":    health["features"],
+			"data":        health,
 		})
 	})
 
@@ -1028,4 +1062,39 @@ func main() {
 	}
 
 	sugar.Info("服务器已优雅关闭")
+}
+
+func getLocalIPv4Addresses() []string {
+	ips := make([]string, 0, 4)
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return ips
+	}
+	for _, iface := range interfaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			var ip net.IP
+			switch v := addr.(type) {
+			case *net.IPNet:
+				ip = v.IP
+			case *net.IPAddr:
+				ip = v.IP
+			}
+			if ip == nil || ip.IsLoopback() {
+				continue
+			}
+			ipv4 := ip.To4()
+			if ipv4 == nil {
+				continue
+			}
+			ips = append(ips, ipv4.String())
+		}
+	}
+	return ips
 }

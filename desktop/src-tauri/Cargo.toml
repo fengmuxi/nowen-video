@@ -1,6 +1,6 @@
-[package]
+﻿[package]
 name = "nowen-video-desktop"
-version = "0.1.0"
+version = "1.2.5"
 description = "nowen-video 桌面客户端（Tauri + libmpv 双内核）"
 authors = ["nowen-video team"]
 edition = "2021"
@@ -84,3 +84,4 @@ codegen-units = 1    # 最佳优化
 lto = true           # 链接时优化
 opt-level = "s"      # 优化体积
 strip = true         # 去除调试符号
+
